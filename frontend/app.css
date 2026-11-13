@@ -433,6 +433,7 @@
   .poster-discussion p { white-space: pre-wrap; overflow-wrap: anywhere; }
   .poster-discussion b { display: block; color: var(--accent); font-size: 12px; }
   .poster-proposal, .poster-output { border-top: 1px solid var(--border); padding-top: 10px; }
+  .poster-plan-prompt { min-height: 12rem; }
   .poster-copy-fields { display: grid; gap: 8px; }
   .workbench-crumb { min-height: 20px; gap: 10px; }
   .workbench-crumb > .btn { padding-block: 3px; min-height: 26px; }

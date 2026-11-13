@@ -598,7 +598,7 @@ function generationGallery() {
       ${asset ? `<div class="studio-result-image">${uploadArtwork(uploadDescriptor(asset), "generation:" + asset.id, true, asset.mime === "image/svg+xml" ? "studio-vector-preview" : "", true)}</div>
         <div class="row studio-result-actions">${format === "gif" ? button("加入拼接", "add-animation-asset", asset.id) : ""}${asset.mime === "image/svg+xml" ? "" : button("圈选修改", "use-upload", asset.id) + button("用作海报产品图", "use-poster-product", asset.id, "ghost") + button("设为参考图", "reference-file", asset.id, "ghost")}<a class="btn btn-ghost" href="/api/assets/${esc(asset.id)}/download">下载${format === "still" ? "" : " " + format.toUpperCase()}</a>${asset.jobId ? button("提示词", "asset-detail", asset.id, "ghost") : ""}</div>`
         : `<div class="studio-result-status">${jobProgress(job)}${jobPreview(job)}${job.error ? `<p class="meta">${esc(job.error)}</p>` : job.status === "succeeded" ? '<p class="meta">图片已移入回收站或暂不可用。</p>' : ""}${job.status === "queued" ? button("取消任务", "cancel-live-job", job.id, "ghost") : ""}</div>`}
-      <div class="row studio-result-actions">${format === "gif" ? button("任务详情", "job-detail", job.id, "ghost") : ""}${button("删除记录", "delete-live-job", job.id, "ghost")}</div>
+      <div class="row studio-result-actions">${jobErrorLink(job) || (format === "gif" ? button("任务详情", "job-detail", job.id, "ghost") : "")}${button("删除记录", "delete-live-job", job.id, "ghost")}</div>
     </article>`;
   }).join("")}</div>`;
 }
@@ -1024,6 +1024,14 @@ function pptReplyText(value) {
   }).join("")}</div>`;
 }
 
+const aiSendShortcut = 'aria-keyshortcuts="Control+Enter" title="Ctrl+Enter 发送"';
+
+function researchModeField(field, mode, locked) {
+  const options = {auto: "自动识别联网请求", always: "每次主动搜索", off: "关闭自动联网"};
+  return `<label class="field">联网搜索<select class="input" data-field="${field}" ${locked}>${Object.entries(options).map(([value, label]) =>
+    `<option value="${value}" ${(mode || "auto") === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>`;
+}
+
 function pptView() {
   const ppt = state.ppt;
   normalizePptDraft(ppt);
@@ -1038,16 +1046,16 @@ function pptView() {
   if (ppt.stage === 0) {
     const files = pptSlots.filter(key => ui.file[key]);
     body = `<div class="work-grid ppt-intake-grid"><div class="card stack ppt-intake"><h2>和 AI 沟通汇报需求</h2>
-      <label class="field">汇报内容<textarea class="textarea" data-field="ppt-brief" maxlength="6000" ${locked} placeholder="描述主题、听众和汇报目标。也可以只上传资料。">${esc(ppt.brief)}</textarea></label>
+      <label class="field">汇报内容<textarea class="textarea" data-field="ppt-brief" ${ppt.discussion.length ? "" : 'data-ai-send="ppt-discuss"'} maxlength="6000" ${locked} placeholder="描述主题、听众和汇报目标。也可以只上传资料。">${esc(ppt.brief)}</textarea></label>
       <div class="stack upload-zone" data-drop-target="ppt"><div class="row">${button("添加资料", "file", "ppt", "secondary", files.length === pptSlots.length ? "disabled" : locked)}<span class="meta">${files.length} / ${pptSlots.length} 份</span>${button("使用项目汇报示例", "ppt-sample", "", "ghost", locked)}</div>
       <p class="meta">支持拖入或多选 PDF、Word、Excel、PPTX、图片和文本。单份最多 12 MB。</p>
       ${files.length ? `<div class="ppt-source-list" aria-label="已添加资料">${files.map(key => `<div class="row">${ui.file[key].url ? uploadArtwork(ui.file[key], "upload:" + key, true, "upload-thumb") : ""}<span>${esc(ui.file[key].name)}</span>${button("移除附件", "detach-file", key, "ghost", locked)}</div>`).join("")}</div>` : ""}</div>
       ${ppt.sourceWarnings.length ? `<details><summary>资料读取提示（${ppt.sourceWarnings.length}）</summary><ul>${ppt.sourceWarnings.map(warning => `<li>${esc(warning)}</li>`).join("")}</ul></details>` : ""}
       ${ppt.discussion.length ? `<div class="ppt-discussion" aria-label="需求沟通记录">${ppt.discussion.map((turn, index) =>
         `<p class="ppt-turn"><b>你</b>${esc(turn?.question)}</p><article class="ppt-turn"><b>AI</b>${pptReplyText(turn?.reply)}${turn?.webSearch ? workspaceCommercial.searchSources(turn.webSearch, "ppt-turn-" + index, index === ppt.discussion.length - 1) : ""}</article>`).join("")}</div>
-        <label class="field">继续补充<textarea class="textarea" data-field="ppt-discussion" maxlength="3000" ${locked} placeholder="回答 AI 的问题，或补充新的要求">${esc(ppt.discussionDraft)}</textarea></label>` : ""}
+        <label class="field">继续补充<textarea class="textarea" data-field="ppt-discussion" data-ai-send="ppt-discuss" maxlength="3000" ${locked} placeholder="回答 AI 的问题，或补充新的要求">${esc(ppt.discussionDraft)}</textarea></label>` : ""}
       ${pptStreamPreview()}
-      <div class="row ppt-intake-actions">${button(pending.get("ppt") === "discuss" ? "正在沟通…" : ppt.discussion.length ? "发送补充" : "开始需求沟通", "ppt-discuss", "", ppt.discussion.length ? "secondary" : "primary", locked)}
+      <div class="row ppt-intake-actions">${button(pending.get("ppt") === "discuss" ? "正在沟通…" : ppt.discussion.length ? "发送补充" : "开始需求沟通", "ppt-discuss", "", ppt.discussion.length ? "secondary" : "primary", locked + " " + aiSendShortcut)}
       ${button("联网搜索并发送", "ppt-search-send", "", "secondary", locked)}
       ${button(pending.get("ppt") === "outline" ? "正在生成大纲…" : "需求已确认，生成大纲", "ppt-outline", "", "primary", ppt.discussion.length ? locked : "disabled")}</div>
       <p class="meta">需求沟通和大纲按语言模型实际 Token 结算。</p></div>
@@ -1055,8 +1063,7 @@ function pptView() {
       <label class="field">详细程度<select class="input" data-field="ppt-level">${["简报","标准","详细"].map(value => `<option ${ppt.level === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
       ${workspacePptTemplates.summary(ppt.style, locked)}
       ${modelSelect("ppt-language-model", "chat", "text", ppt.languageModel, "语言模型")}
-      <label class="field">联网搜索<select class="input" data-field="ppt-search-mode" ${locked}>${Object.entries({auto: "自动识别联网请求", always: "每次主动搜索", off: "关闭自动联网"}).map(([value, label]) =>
-        `<option value="${value}" ${(ppt.searchMode || "auto") === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+      ${researchModeField("ppt-search-mode", ppt.searchMode, locked)}
       <p class="meta">「联网搜索并发送」会为本轮重新查找公开资料。回复可展开查看来源。</p></aside></div>`;
   } else if (ppt.stage === 1) {
     body = `<div class="work-grid"><div class="card stack"><h2>逐页确认大纲</h2>
@@ -1110,8 +1117,8 @@ function pptView() {
         <button type="button" class="btn btn-secondary" data-open-media="slide:${ppt.active}" ${asset ? "" : "disabled"}>放大查看本页</button>
         ${!ready ? button("采用分镜，进入导出", "ppt-use-boards", "", "primary", complete ? locked : "disabled") : ""}
         ${!ready && !complete ? button("补齐缺失分镜", "ppt-board", "", "secondary", submitLocked) : ""}
-        <label class="field">用一句话描述本页修改<textarea class="textarea" data-field="ppt-change" maxlength="1000" ${submitLocked} placeholder="例如只调整采购流程配色，保留节点与箭头">${esc(edit.change ?? "")}</textarea></label>
-        ${button(pending.get("ppt") === "revise-slide" ? "AI 正在修改…" : "请 AI 优化本页提示词", "ppt-ai-revise", "", "secondary", submitLocked)}
+        <label class="field">用一句话描述本页修改<textarea class="textarea" data-field="ppt-change" data-ai-send="ppt-ai-revise" maxlength="1000" ${submitLocked} placeholder="例如联网核实本页数据，或只调整配色并保留节点">${esc(edit.change ?? "")}</textarea></label>
+        ${button(pending.get("ppt") === "revise-slide" ? "AI 正在修改…" : "请 AI 优化本页提示词", "ppt-ai-revise", "", "secondary", submitLocked + " " + aiSendShortcut)}
         ${pptStreamPreview()}
         <p class="meta">AI 只整理本页提示词，按实际 Token 结算。确认重出后才生成图片。</p>
         ${edit.suggestion ? `<label class="field">AI 建议（可编辑）<textarea class="textarea" data-field="ppt-suggestion" maxlength="4500">${esc(edit.suggestion)}</textarea></label>
@@ -1284,7 +1291,7 @@ function captureGuestDraft() {
     homePrompt: ui.homePrompt, homeMode: ui.homeMode, chatPrompt: ui.guestChatPrompt, chatTextOnly: ui.guestChatTextOnly,
     generation: changes(imageGeneration(), defaults.image.generation, [...imageFields, "count", "formats"]),
     edit: changes(state.image, defaults.image, [...imageFields, "expandDirection", "editSizeChosen", "editToolDrafts"]),
-    poster: changes(state.poster, defaults.poster, ["title", "subtitle", "date", "prompt", "preset", "model", "selected", "exports", "mode", "message", "languageModel"]),
+    poster: changes(state.poster, defaults.poster, ["title", "subtitle", "date", "prompt", "promptOnly", "preset", "model", "selected", "exports", "mode", "message", "languageModel"]),
     ppt: changes(state.ppt, defaults.ppt, ["brief", "level", "style", "model", "languageModel", "discussionDraft", "resolution", "searchMode"]),
     files: Object.entries(ui.file).filter(([, item]) => item?.localFile),
     regions: state.image.regions,
@@ -1532,6 +1539,7 @@ const adminSections = [
   ["access", "邀请码与积分"],
   ["policy", "生图规则"],
   ["queue", "任务设置"],
+  ["storage", "聊天记录与存储"],
   ["tasks", "任务记录"],
   ["audit", "操作记录"]
 ];
@@ -1603,6 +1611,7 @@ function adminView() {
     access: () => opsView("access"),
     policy: adminPolicyView,
     queue: () => opsView("queue"),
+    storage: adminStorageView,
     tasks: () => opsView("tasks"),
     audit: () => opsView("audit")
   };
@@ -1618,6 +1627,18 @@ function adminView() {
       </nav>
     </aside>
     <div class="ops-content" id="ops-content">${views[section]()}</div>
+  </section>`;
+}
+
+function adminStorageView() {
+  const storage = ui.storage;
+  return `<section class="card commercial-admin stack" aria-label="聊天记录与存储">
+    <div><h2>聊天记录与存储</h2><p class="meta">AI 对话、PPT 和海报的聊天记录与摘要会自动保存到本地，关闭后仍可继续使用。</p></div>
+    ${storage ? `<label class="field">当前保存文件夹<input class="input" readonly value="${esc(storage.directory)}"></label>
+      <label class="field">聊天记录与摘要数据库<input class="input" readonly value="${esc(storage.database)}"></label>
+      <p class="meta">这里显示正在使用的保存位置，无需另外创建聊天记录文件。压缩只整理发送给模型的内容，不会删除原始记录。</p>
+      <p class="meta">备份时，请先正常关闭本地工作台服务，再复制整个保存文件夹；其中也包含项目、素材和服务连接配置，请妥善保管。</p>`
+      : '<p class="meta" role="status">正在读取保存位置…</p>'}
   </section>`;
 }
 
@@ -1704,12 +1725,13 @@ async function refreshRoute() {
           if (detail) detail.innerHTML = adminPolicyView();
         }
       }
-      const endpoint = {users: "users", tasks: "jobs", audit: "audit", queue: "generation-settings"}[section];
+      const endpoint = {users: "users", tasks: "jobs", audit: "audit", queue: "generation-settings", storage: "storage"}[section];
       if (endpoint) {
         const result = await api(`admin/${endpoint}`);
         if (owner !== identity || ui.route !== "admin" || section !== activeAdminSection()) return;
         if (section === "users") ui.users = result.items || [];
         else if (section === "queue") ui.generationSettings = result;
+        else if (section === "storage") ui.storage = result;
         else (live.operations ||= {jobs: [], audit: []})[endpoint] = result.items || [];
         const detail = document.querySelector("#ops-content");
         if (detail) {
@@ -1717,7 +1739,7 @@ async function refreshRoute() {
           const scroll = detail.querySelector(".admin-users-table");
           const top = scroll?.scrollTop || 0;
           const left = scroll?.scrollLeft || 0;
-          detail.innerHTML = section === "users" ? adminUsersView() : opsView(section);
+          detail.innerHTML = section === "users" ? adminUsersView() : section === "storage" ? adminStorageView() : opsView(section);
           if (filter) {
             const input = detail.querySelector('[data-field="user-filter"]');
             input.value = filter;
@@ -2386,15 +2408,6 @@ const actions = {
   "poster-discuss": () => posterAdvisor(),
   "poster-new-chat": () => switchPosterChat(),
   "poster-plan": () => posterAdvisor(true),
-  "poster-apply": () => {
-    const {proposal} = state.poster;
-    if (!proposal) return;
-    const {title, subtitle, date, prompt, formats} = proposal;
-    Object.assign(state.poster, {title, subtitle, date, prompt, mode: "manual"});
-    if (formats.length) Object.assign(state.poster, {exports: formats, selected: formats[0]});
-    save();
-    render();
-  },
   "poster-generate": createPosterVisual,
   "save-poster": () => outputPosters(true),
   "export-poster": () => outputPosters(false),
@@ -2565,6 +2578,14 @@ content.addEventListener("input", event => {
     }
   }
   if (field === "poster-prompt") state.poster.prompt = value;
+  if (field === "poster-plan-prompt" && state.poster.proposal?.promptVersion === 2) state.poster.proposal.prompt = value;
+  if (field === "poster-prompt-only") {
+    state.poster.promptOnly = event.target.checked;
+    save();
+    render();
+    content.querySelector('[data-field="poster-prompt-only"]')?.focus({preventScroll: true});
+    return;
+  }
   if (field === "poster-preset" && Object.hasOwn(posterPresets, value)) {
     state.poster.preset = value;
     const note = content.querySelector("[data-poster-preset-note]");
@@ -2582,7 +2603,9 @@ content.addEventListener("input", event => {
     switchPptChat(value).catch(error => notify(error.message));
     return;
   }
-  if (field === "ppt-search-mode" && ["auto", "always", "off"].includes(value)) state.ppt.searchMode = value;
+  if (["ppt-search-mode", "poster-search-mode"].includes(field) && ["auto", "always", "off"].includes(value)) {
+    state[field === "ppt-search-mode" ? "ppt" : "poster"].searchMode = value;
+  }
   if (field === "ppt-resolution" && Object.hasOwn(pptResolutions, value)) state.ppt.resolution = value;
   if (field === "ppt-auto-review") state.ppt.autoReview = event.target.checked;
   if (field === "ppt-preserve-image") pptPageEdit().preserveImage = event.target.checked;
@@ -3064,6 +3087,17 @@ content.addEventListener("scroll", event => {
 window.addEventListener("resize", syncStudioAssetArrows);
 window.addEventListener("hashchange", syncRoute);
 content.addEventListener("keydown", event => {
+  const composer = event.target.closest("textarea[data-ai-send]");
+  if (composer && event.key === "Enter" && event.ctrlKey && !event.altKey && !event.metaKey &&
+      !event.shiftKey && !event.isComposing && event.keyCode !== 229 && !event.defaultPrevented) {
+    event.preventDefault();
+    if (event.repeat || composer.disabled) return;
+    const action = composer.dataset.aiSend;
+    const submit = action ? content.querySelector('[data-action="' + CSS.escape(action) + '"]') :
+      composer.form?.querySelector('button[type="submit"]');
+    submit?.click();
+    return;
+  }
   if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey ||
       !event.target.closest(".ppt-preview, .slide-grid")) return;
   const direction = {ArrowLeft: -1, ArrowRight: 1}[event.key];

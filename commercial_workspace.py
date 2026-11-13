@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import smtplib
+import sqlite3
 import ssl
 import threading
 import time
@@ -29,6 +30,9 @@ import commercial_image_policy as image_policy
 import commercial_provider as provider
 import commercial_upscale as upscale
 import commercial_web_search as web_search
+import commercial_context as chat_context
+import commercial_memory as chat_memory
+import commercial_research as research_tools
 from commercial_billing import CREDIT_ADJUSTMENT_MAX
 
 MAX_GENERATION_CONCURRENCY = 20
@@ -131,9 +135,10 @@ def setup(db, data):
     if "hidden_at" not in job_columns:
         db.execute("ALTER TABLE generation_jobs ADD COLUMN hidden_at INTEGER")
     turn_columns = {item["name"] for item in db.execute("PRAGMA table_info(chat_turns)")}
-    for name in ("token_rates", "token_usage", "upstream_id", "asset_ids", "web_search"):
+    for name in ("token_rates", "token_usage", "upstream_id", "asset_ids", "web_search", "memory_scope", "memory_calls"):
         if name not in turn_columns:
             db.execute(f"ALTER TABLE chat_turns ADD COLUMN {name} TEXT")
+    chat_memory.setup(db)
 
 
 def now():
@@ -272,7 +277,8 @@ def owned_asset(db, owner, identifier, image_only=False, include_trash=False):
 def list_assets(db, owner, trash=False):
     rows = db.execute("""SELECT a.id,a.name,a.mime,a.size,a.created,COALESCE(d.kind,'upload') AS kind,
         COALESCE(d.tags,'') AS tags,COALESCE(d.notes,'') AS notes,d.parent_id AS parentId,d.job_id AS jobId,
-        j.model_name AS modelName,j.width,j.height
+        j.model_name AS modelName,j.width,j.height,
+        CASE WHEN j.scope='poster' THEN json_extract(j.payload,'$.context.posterPromptOnly') END AS posterPromptOnly
         FROM assets a LEFT JOIN asset_details d ON d.asset_id=a.id
         LEFT JOIN generation_jobs j ON j.id=d.job_id
         WHERE a.user_id=? AND COALESCE(d.trashed,0)=? ORDER BY a.created DESC,a.rowid DESC""",
@@ -464,9 +470,6 @@ def submit_jobs(db, owner, body, *, upscale_method=None):
             check_image_count(model, image_ids)
         if type(item.get("unitPrice")) is not int or item["unitPrice"] != model["price"]:
             raise CommercialError(409, "模型价格已更新，请重新查看报价。")
-        identifier = uuid.uuid4().hex
-        if model["price"]:
-            change_points(db, owner, -model["price"], "预留 · " + label, "reserve:" + identifier)
         context = {}
         if raw_context is not None:
             if not isinstance(raw_context, dict):
@@ -484,6 +487,8 @@ def submit_jobs(db, owner, body, *, upscale_method=None):
                 context["formatId"] = format_id
             if poster_shot:
                 context["posterShot"] = poster_shot
+            if scope == "poster" and raw_context.get("posterPromptOnly") is True:
+                context["posterPromptOnly"] = True
             if scope == "ppt":
                 index, phase = raw_context.get("index"), raw_context.get("phase")
                 if type(index) is not int or not 0 <= index < 12 or phase not in ("board", "final", "redo"):
@@ -496,6 +501,15 @@ def submit_jobs(db, owner, body, *, upscale_method=None):
                 if raw_context.get("reviewModel") and phase != "board":
                     checker = provider.resolve(db, "chat", raw_context["reviewModel"], "vision")
                     context["reviewModel"] = checker["id"]
+        if scope == "poster" and context and db.execute("""
+            SELECT 1 FROM generation_jobs WHERE owner=? AND scope='poster' AND status IN ('queued','running')
+            AND json_extract(payload,'$.context.documentId')=?
+            AND COALESCE(json_extract(payload,'$.context.formatId'),'main')=? LIMIT 1
+            """, (owner, context["documentId"], context.get("formatId", "main"))).fetchone():
+            raise CommercialError(409, "同一海报尺寸已有任务在排队或生成，请刷新后选择尚未提交的尺寸。")
+        identifier = uuid.uuid4().hex
+        if model["price"]:
+            change_points(db, owner, -model["price"], "预留 · " + label, "reserve:" + identifier)
         payload = {"prompt": prompt, "size": size, "imageIds": image_ids, "mask": mask, "context": context}
         if upscale_method:
             payload["upscaleMethod"] = upscale_method
@@ -786,10 +800,11 @@ def run_job(database, store, row, on_success):
                            (receipt.get("requestId"), review, json.dumps(payload, ensure_ascii=False), row["id"]))
                 archive_image(db, store, row, payload, data, submitted)
             succeeded = True
-        except (OSError, ValueError, KeyError) as error:
+        except (OSError, ValueError, KeyError, sqlite3.Error) as error:
             if payload.get("upscaleMethod") == "local":
                 raise CommercialError(500, "本地放大完成，但未能保存成品。") from error
-            raise provider.ProviderError(502, "已收到上游结果，归档未完成，请核对。", uncertain=True) from error
+            raise provider.ProviderError(502, "已收到上游结果，归档未完成，请核对。",
+                                         uncertain=True, request_id=receipt.get("requestId")) from error
     except (provider.ProviderError, CommercialError, OSError) as error:
         with database() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -893,7 +908,8 @@ def conversation(db, owner, identifier, method):
 
 
 def start_chat(db, owner, identifier, body, *, system=None, max_output=4096, label="AI 对话",
-               include_history=False, extra_input=0, asset_ids=None, capability="text"):
+               include_history=False, extra_input=0, asset_ids=None, capability="text", context_history=None,
+               search_planning=False, memory_scope=None):
     row = owned_conversation(db, owner, identifier)
     prompt = text(body.get("text"), "消息", 12000)
     request = text(body.get("requestId"), "请求号", 80)
@@ -904,33 +920,44 @@ def start_chat(db, owner, identifier, body, *, system=None, max_output=4096, lab
         return None, existing["reply"], existing
     if db.execute("SELECT 1 FROM chat_turns WHERE conversation=? AND status='running'", (identifier,)).fetchone():
         raise CommercialError(409, "请先等待上一条消息完成。")
-    model = provider.resolve(db, "chat", body.get("modelId"), capability)
+    model = dict(provider.resolve(db, "chat", body.get("modelId"), capability))
     rates = model["tokenRates"]
     if not rates or body.get("tokenRates") != rates:
         raise CommercialError(409, "语言模型价格已更新，请重新确认后提交。")
-    messages = []
-    if system is not None:
-        messages.append({"role": "system", "content": system})
-    if system is None or include_history:
+    history = []
+    if context_history is not None:
+        history = chat_context.history_messages(context_history)
+    elif system is None or include_history:
         previous = db.execute("""SELECT user_text,reply FROM chat_turns WHERE conversation=?
-            AND (status='succeeded' OR (status='unknown' AND reply<>'')) ORDER BY id DESC LIMIT 16""", (identifier,)).fetchall()
-        for turn in reversed(previous):
-            messages.extend([{"role": "user", "content": turn["user_text"]}, {"role": "assistant", "content": turn["reply"]}])
-    messages.append({"role": "user", "content": prompt})
-    # UTF-8 bytes plus message framing provide a conservative budget for text input.
-    input_budget = 64 + extra_input + sum(16 + len(message["content"].encode("utf-8")) for message in messages)
-    budget = input_budget * rates["input"] + max_output * rates["output"]
+            AND (status='succeeded' OR (status='unknown' AND reply<>'')) ORDER BY id""", (identifier,)).fetchall()
+        for turn in previous:
+            history.extend([{"role": "user", "content": turn["user_text"]}, {"role": "assistant", "content": turn["reply"]}])
+    memory_scope = memory_scope or chat_memory.scope_key(owner, identifier)
+    if db.execute("SELECT 1 FROM chat_turns WHERE memory_scope=? AND status='running'", (memory_scope,)).fetchone():
+        raise CommercialError(409, "本会话仍在回复或整理摘要，请等待完成。")
+    try:
+        memory = chat_memory.Plan(db, owner, identifier, memory_scope, model, system, history, prompt, extra_input, max_output)
+        messages = memory.messages()
+    except ValueError as error:
+        raise CommercialError(400, str(error)) from error
+    memory_input, memory_output = memory.reserve()
+    input_budget = 64 + extra_input + memory_input
+    if search_planning:
+        input_budget += research_tools.PLANNER_INPUT_BUDGET
+    budget = input_budget * rates["input"] + (max_output + memory_output + (research_tools.PLANNER_OUTPUT_BUDGET if search_planning else 0)) * rates["output"]
     if budget:
         carry = db.execute("SELECT remainder FROM chat_billing WHERE owner=?", (owner,)).fetchone()
         # A balance migrated from hundredths can contain whole units at the new precision.
         if carry and carry["remainder"] >= provider.TOKEN_UNIT:
             budget += carry["remainder"]
     reserve = (budget + provider.TOKEN_UNIT - 1) // provider.TOKEN_UNIT
-    cursor = db.execute("""INSERT INTO chat_turns(conversation,request_id,user_text,model_name,price,status,created,token_rates,asset_ids)
-        VALUES(?,?,?,?,?,'running',?,?,?)""",
-        (identifier, request, prompt, model["name"], reserve, now(), json.dumps(rates), json.dumps(asset_ids) if asset_ids else None))
+    cursor = db.execute("""INSERT INTO chat_turns(conversation,request_id,user_text,model_name,price,status,created,token_rates,asset_ids,memory_scope)
+        VALUES(?,?,?,?,?,'running',?,?,?,?)""",
+        (identifier, request, prompt, model["name"], reserve, now(), json.dumps(rates), json.dumps(asset_ids) if asset_ids else None, memory_scope))
     turn_id = cursor.lastrowid
     change_points(db, owner, -reserve, "预留 · " + label, f"chat-reserve:{turn_id}")
+    memory.save(db)
+    model['_memory_plan'] = memory
     db.execute("UPDATE conversations SET updated=?,title=? WHERE id=?",
                (now(), prompt[:36] if row["title"] == "新对话" else row["title"], identifier))
     return model, messages, turn_id
@@ -947,8 +974,9 @@ def token_usage(value):
 
 
 def billing_view(turn):
-    return {"status": turn["status"], "usage": json.loads(turn["token_usage"]) if turn["token_usage"] else None,
-            "charged": turn["price"] if turn["status"] == "succeeded" else None}
+    usage = json.loads(turn["token_usage"]) if turn["token_usage"] else None
+    return {"status": turn["status"], "usage": usage,
+            "charged": turn["price"] if turn["status"] == "succeeded" or (turn["status"] == "failed" and usage) else None}
 
 
 def finish_chat(db, owner, turn_id, reply, status, receipt=None, label="AI 对话", *, reconcile=False):
@@ -957,12 +985,25 @@ def finish_chat(db, owner, turn_id, reply, status, receipt=None, label="AI 对�
         raise CommercialError(409, "语言任务状态已变化，请刷新。")
     receipt = receipt or {}
     usage = token_usage(receipt.get("usage"))
+    auxiliary = [*(receipt.get('memoryCalls') or []), *([receipt['researchCall']] if receipt.get('researchCall') else [])]
+    # Unknown usage in any paid call must not be hidden by a subsequent successful call.
+    unresolved = any(call.get('uncertain') or (call.get('completed') and token_usage(call.get('usage')) is None) for call in auxiliary)
+    if unresolved:
+        usage, status = None, 'unknown'
+    else:
+        for call in auxiliary:
+            other = token_usage(call.get('usage')) if call.get('completed') else None
+            if other is not None:
+                if usage is not None:
+                    usage = {key: usage[key] + other[key] for key in usage}
+                elif status == 'failed':
+                    usage = other
     rates = json.loads(row["token_rates"]) if row["token_rates"] else None
     reserved = row["price"]
     charged = reserved
-    if status == "failed":
+    if status == "failed" and usage is None:
         change_points(db, owner, reserved, "释放 · " + label, f"chat-release:{turn_id}")
-    elif status == "succeeded":
+    elif status in ("succeeded", "failed"):
         if usage is None and rates and any(rates.values()):
             status = "unknown"
         else:
@@ -984,9 +1025,11 @@ def finish_chat(db, owner, turn_id, reply, status, receipt=None, label="AI 对�
                     db.execute("""INSERT INTO chat_billing(owner,remainder) VALUES(?,?)
                         ON CONFLICT(owner) DO UPDATE SET remainder=excluded.remainder""", (owner, remainder))
                 change_points(db, owner, reserved - charged, "结算 · " + detail, f"chat-settle:{turn_id}")
-    db.execute("""UPDATE chat_turns SET reply=?,status=?,price=?,token_usage=COALESCE(?,token_usage),
+    upstream_ids = [value for value in (*[call.get('requestId') for call in auxiliary], receipt.get('requestId')) if value]
+    upstream_id = json.dumps(upstream_ids) if len(upstream_ids) > 1 else (upstream_ids[0] if upstream_ids else None)
+    db.execute("""UPDATE chat_turns SET reply=?,status=?,price=?,token_usage=?,
                   upstream_id=COALESCE(?,upstream_id) WHERE id=?""",
-               (reply, status, charged, json.dumps(usage) if usage else None, receipt.get("requestId"), turn_id))
+               (reply, status, charged, json.dumps(usage) if usage else None, upstream_id, turn_id))
     return billing_view(db.execute("SELECT * FROM chat_turns WHERE id=?", (turn_id,)).fetchone())
 
 
@@ -1007,10 +1050,22 @@ def workbench_conversation(owner, label, session_id=""):
     return "workbench-" + hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
+def request_history(body):
+    if 'history' not in body:
+        return None  # Legacy clients keep their supplied transcript.
+    try:
+        return chat_context.validate_history(body['history'])
+    except ValueError as error:
+        raise CommercialError(400, str(error)) from error
+
+
 def chat_task(database, owner, body, message, system, label, parse=None, *, max_output=4096, emit=None, ready=None,
-              research=None, research_id="", on_evidence=None, session_id="", image_uri=None, visual_references=()):
+              research=None, research_id="", on_evidence=None, research_instruction=web_search.PPT_INSTRUCTION,
+              session_id="", image_uri=None, visual_references=(), context_history=None, on_memory=None):
     request = text(body.get("requestId"), "请求号", 80)
     identifier = workbench_conversation(owner, label, session_id)
+    family = 'ppt' if label.startswith('PPT') else 'poster' if label.startswith('海报') else label
+    memory_scope = chat_memory.scope_key(owner, identifier, family, session_id, body.get('researchId', '') if family == 'ppt' else '')
     with database() as db:
         db.execute("BEGIN IMMEDIATE")
         db.execute("INSERT OR IGNORE INTO conversations VALUES(?,?,?,?)", (identifier, owner, label, now()))
@@ -1019,7 +1074,9 @@ def chat_task(database, owner, body, message, system, label, parse=None, *, max_
             extra_input += min(len(visual_references[1]), ecommerce.MAX_VISION_REFERENCES) * ecommerce.VISION_TOKEN_BUDGET
         model, previous, turn = start_chat(db, owner, identifier, {**body, "requestId": request, "text": message},
                                            system=system, max_output=max_output, label=label,
-                                           extra_input=extra_input, capability="vision" if image_uri else "text")
+                                           extra_input=extra_input, capability="vision" if image_uri else "text",
+                                           context_history=context_history, search_planning=isinstance(research, research_tools.Research),
+                                           memory_scope=memory_scope)
     if ready is not None:
         ready()
     if not model:
@@ -1028,20 +1085,25 @@ def chat_task(database, owner, body, message, system, label, parse=None, *, max_
         evidence = json.loads(turn["web_search"]) if turn["web_search"] else None
         if evidence:
             evidence.pop("researchId", None)
+            if on_evidence is not None:
+                on_evidence(evidence)
         return (parse(previous) if parse else previous), billing_view(turn), evidence, turn["id"]
     receipt = {}
     chunks = []
     evidence = None
     try:
+        previous = chat_memory.prepare(database, model, turn, receipt, on_memory) or previous
         if image_uri:
             previous[-1]["content"] = [{"type": "text", "text": message},
                                        {"type": "image_url", "image_url": {"url": image_uri}}]
         if research:
+            if isinstance(research, research_tools.Research):
+                research.prepare(model, receipt)
             evidence = web_search.bounded_evidence(research())
             with database() as db:
                 db.execute("UPDATE chat_turns SET web_search=? WHERE id=?",
                            (json.dumps({**evidence, "researchId": research_id}, ensure_ascii=False), turn))
-            previous = web_search.add_context(previous, evidence, web_search.PPT_INSTRUCTION)
+            previous = web_search.add_context(previous, evidence, research_instruction)
             if on_evidence is not None:
                 on_evidence(evidence)
         if visual_references and "vision" in model["capabilities"]:
@@ -1061,7 +1123,7 @@ def chat_task(database, owner, body, message, system, label, parse=None, *, max_
         with database() as db:
             db.execute("BEGIN IMMEDIATE")
             receipt.setdefault("requestId", error.request_id)
-            finish_chat(db, owner, turn, "", "unknown" if error.uncertain else "failed", receipt, label)
+            error.billing = finish_chat(db, owner, turn, "", "unknown" if error.uncertain else "failed", receipt, label)
         raise
     except Exception:
         with database() as db:
@@ -1070,10 +1132,10 @@ def chat_task(database, owner, body, message, system, label, parse=None, *, max_
         raise
     try:
         result = parse(reply) if parse else reply
-    except CommercialError:
+    except CommercialError as error:
         with database() as db:
             db.execute("BEGIN IMMEDIATE")
-            finish_chat(db, owner, turn, "", "failed", receipt, label)
+            error.billing = finish_chat(db, owner, turn, "", "failed", receipt, label)
         raise
     with database() as db:
         db.execute("BEGIN IMMEDIATE")
@@ -1099,13 +1161,14 @@ def poster_reference_assets(db, owner, body):
 def poster_advisor_message(db, owner, body, *, references=None):
     data = {
         "本轮需求": text(body.get("message", ""), "本轮需求", 2000, 0),
-        "已确认沟通": text(body.get("transcript", ""), "沟通记录", 5000, 0),
+        "已确认沟通": '' if 'history' in body else text(body.get("transcript", ""), "沟通记录", 5000, 0),
         "活动标题": text(body.get("title", ""), "活动标题", 80, 0),
         "活动副标题": text(body.get("subtitle", ""), "活动副标题", 160, 0),
         "活动时间": text(body.get("date", ""), "活动时间", 32, 0),
         "画面描述": text(body.get("prompt", ""), "画面描述", 3000, 0),
     }
-    if not (data["本轮需求"] or data["已确认沟通"]):
+    history = request_history(body)
+    if not (data["本轮需求"] or data["已确认沟通"] or any(turn['question'].strip() for turn in history or [])):
         raise CommercialError(400, "请先描述海报用途。")
     if references is None:
         references = poster_reference_assets(db, owner, body)
@@ -1124,15 +1187,37 @@ def poster_advisor_message(db, owner, body, *, references=None):
     return json.dumps(data, ensure_ascii=False)
 
 
+_POSTER_RESEARCH_NOTE = re.compile(
+    r"联网(?:资料|结果|搜索|核实)|外部资料|检索(?:资料|结果|来源|发现)|"
+    r"(?:参考|资料|引用|信息|数据)来源|(?:来源|出处)\s*[：:]|参考(?:链接|文献)|"
+    r"(?:报道|官网|网页|搜索摘要|公开资料)(?:中|里)?(?:显示|称|提到|提及|指出|披露)|"
+    r"尚未(?:核实|证实|确认)|(?:未|无法)(?:核实|证实|确认)(?:具体|该|品牌|型号|规格|参数|价格)|"
+    r"(?:仅|只)(?:供|作|作为)(?:选品线索|事实线索)|正式(?:制作|发布|投放)前(?:需|请)|"
+    r"https?://|[\[［【]\s*\d+(?:\s*[,，、–-]\s*\d+)*\s*[\]］】]",
+    re.IGNORECASE,
+)
+_POSTER_PROMPT_BREAK = re.compile(r'“[^”\n]*”|「[^」\n]*」|『[^』\n]*』|"[^"\n]*"|(?P<boundary>[。！？；\n]|[.!?;](?=\s|$))')
+
+
+def clean_poster_advisor_prompt(prompt):
+    # Generated prompts may carry notes from the preceding conversation. Keep the visual directions.
+    boundaries = [match.end() for match in _POSTER_PROMPT_BREAK.finditer(prompt) if match.lastgroup == "boundary"]
+    segments = (prompt[start:end] for start, end in zip([0, *boundaries], [*boundaries, len(prompt)]))
+    return "".join(segment for segment in segments if not _POSTER_RESEARCH_NOTE.search(
+        _POSTER_PROMPT_BREAK.sub(lambda match: match[0] if match.lastgroup == "boundary" else "", segment)
+    )).strip()
+
+
 def poster_advisor_result(reply):
     try:
         value = json.loads(re.sub(r"^\x60\x60\x60(?:json)?\s*|\s*\x60\x60\x60$", "", reply.strip(), flags=re.IGNORECASE))
         if not isinstance(value, dict) or not isinstance(value.get("formats"), list):
             raise ValueError
         formats = list(dict.fromkeys(item for item in value["formats"] if isinstance(item, str) and item in POSTER_FORMATS))
-        result = {field: text(value.get(field, ""), field, limit, int(field == "prompt"))
-                  for field, limit in (("title", 30), ("subtitle", 40), ("date", 32), ("prompt", 2000))}
-        return {**result, "formats": formats}
+        prompt = clean_poster_advisor_prompt(text(value.get("prompt"), "海报生图提示词", 4500))
+        if not prompt:
+            raise ValueError
+        return {"prompt": prompt, "formats": formats, "promptVersion": 2}
     except (ValueError, TypeError, CommercialError) as error:
         raise CommercialError(422, "AI 返回的海报方案无法识别，请重新整理或更换模型。") from error
 

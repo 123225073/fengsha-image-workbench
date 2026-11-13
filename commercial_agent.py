@@ -96,7 +96,7 @@ def _references(db, owner, conversation, selected):
     return {f"image_{index}": asset for index, asset in enumerate(assets, 1)}
 
 
-def start(db, owner, conversation, body, *, extra_input=0):
+def start(db, owner, conversation, body, *, extra_input=0, search_planning=False):
     workspace.owned_conversation(db, owner, conversation)
     selected = body.get("assetIds", [])
     prompt = str(body.get("text", ""))
@@ -158,6 +158,7 @@ def start(db, owner, conversation, body, *, extra_input=0):
     model, messages, turn = workspace.start_chat(
         db, owner, conversation, body, system=system, max_output=MAX_OUTPUT, include_history=True,
         extra_input=len(fallback.encode("utf-8")) + 64 + extra_input + vision_cost, asset_ids=selected,
+        search_planning=search_planning,
     )
     return model, messages, turn, tools, fallback, references, image_model, skill, selected_refs
 

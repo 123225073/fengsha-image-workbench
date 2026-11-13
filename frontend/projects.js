@@ -661,7 +661,7 @@ const workspaceProjects = (() => {
       const fields = templateFieldsToApply(settings, ["title", "subtitle", "date", "prompt", "preset"]);
       return confirmTemplateChanges(template, fields, state.poster, {...initialState().poster, preset: "auto"}, () => {
         if (scopeInProgress("poster") || pending.has("poster-advisor")) return notify("请等待当前海报操作完成后再使用模板。");
-        Object.assign(state.poster, fields, {mode: "manual", previewTab: "reference"});
+        Object.assign(state.poster, fields, {mode: "manual", promptOnly: false, previewTab: "reference"});
         save();
         go("poster");
       });

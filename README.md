@@ -4,7 +4,7 @@
 
 ## 下载安装
 
-1. 到 [GitHub 仓库](https://github.com/123225073/fengsha-image-workbench)，点 **Code → Download ZIP**。在 Windows 资源管理器右键下载的 ZIP，若「属性」里有「解除锁定」，勾选后再解压到可写文件夹。
+1. 到 [最新版本](https://github.com/123225073/fengsha-image-workbench/releases/latest)，下载对应版本的 `fengsha-image-workbench-版本号-windows.zip`；历史恢复附件仅供回退。也可在 [GitHub 仓库](https://github.com/123225073/fengsha-image-workbench) 点 **Code → Download ZIP** 获取源码。在 Windows 资源管理器右键下载的 ZIP，若「属性」里有「解除锁定」，勾选后再解压到可写文件夹。
 2. 双击 **检查电脑环境.cmd**。它只检查 Windows、Python、磁盘空间、显卡和本地超分状态。
 3. 双击 **启动本地工作台.cmd**。支持复用 64 位 Python 3.12 或 3.13。缺少 Python 时，输入 `Y` 同意安装官方 Python 到项目目录。随后输入 `Y` 同意在项目的 `.venv` 中安装依赖。后续启动复用这套环境。
 4. 保持启动窗口打开，浏览器会进入 [工作台首页](http://127.0.0.1:8766/)。关闭工作台可回到启动窗口按 **Ctrl+C**。若 8766 已被其他程序占用，关闭占用程序或按下文改用另一个本机端口。

@@ -1,6 +1,61 @@
 "use strict";
 
 const workspaceCommercial = (() => {
+  // Receive and settle the stream immediately; pace only the visible text.
+  function revealText(paint) {
+    let visible = "", target = "", queue = [], cursor = 0, timer, finish;
+    let deadline = 0;
+    const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+    const immediate = () => document.hidden || reducedMotion.matches;
+    const flush = () => {
+      clearTimeout(timer);
+      timer = undefined;
+      queue = [];
+      cursor = 0;
+      if (visible !== target) paint(visible = target);
+      const resolve = finish;
+      finish = undefined;
+      resolve?.();
+    };
+    const step = () => {
+      timer = undefined;
+      if (immediate() || (deadline && performance.now() >= deadline)) return flush();
+      const remaining = queue.length - cursor;
+      if (remaining <= 0) return flush();
+      const budget = deadline ? Math.max(2, Math.floor((deadline - performance.now()) / 24)) : 28;
+      const next = Math.min(queue.length, cursor + Math.ceil(remaining / budget));
+      visible += queue.slice(cursor, next).join("");
+      cursor = next;
+      paint(visible);
+      if (cursor === queue.length) flush();
+      else timer = setTimeout(step, 24);
+    };
+    const set = text => {
+      if (text === target) return;
+      const extendsTarget = text.startsWith(target);
+      if (extendsTarget) {
+        queue = queue.slice(cursor).concat(Array.from(text.slice(target.length)));
+        cursor = 0;
+      }
+      else {
+        queue = Array.from(text.startsWith(visible) ? text.slice(visible.length) : text);
+        cursor = 0;
+        if (!text.startsWith(visible)) paint(visible = "");
+      }
+      target = text;
+      if (immediate()) flush();
+      else if (timer === undefined) timer = setTimeout(step, 0);
+    };
+    return {set, flush, drain() {
+      if (visible === target || immediate()) {
+        flush();
+        return Promise.resolve();
+      }
+      deadline = performance.now() + 480;
+      return new Promise(resolve => { finish = resolve; });
+    }};
+  }
+
   const capabilityLabels = {
     generate: "文生图",
     reference: "参考图生图",
@@ -252,6 +307,7 @@ const workspaceCommercial = (() => {
         <div class="commercial-fields" data-token-prices${kind === "chat" ? "" : " hidden"}>
           <label class="field">输入单价（积分 / 百万 Token）<input class="input" type="number" name="inputRate" value="${item.tokenRates ? price(item.tokenRates.input) : ""}" min="0" max="1000000" step="${POINT_STEP}" placeholder="例如 2.00"${kind === "chat" ? "" : " disabled"}></label>
           <label class="field">输出单价（积分 / 百万 Token）<input class="input" type="number" name="outputRate" value="${item.tokenRates ? price(item.tokenRates.output) : ""}" min="0" max="1000000" step="${POINT_STEP}" placeholder="例如 8.00"${kind === "chat" ? "" : " disabled"}></label>
+          <label class="field" ${kind === "chat" ? "" : "hidden"}>上下文窗口（Token）<input class="input" type="number" name="contextWindowTokens" value="${item.contextWindowSource === "configured" ? item.contextWindowTokens : ""}" min="16384" max="10000000" step="1" placeholder="未配置：保守按 65536 估算"${kind === "chat" ? "" : " disabled"}><small>填写服务商支持的容量。接近容量时自动整理早期对话，摘要用量计入本轮。</small></label>
           <p class="meta">按服务商返回的用量结算。不足 0.000001 积分的部分累计，设为 0 表示该项免费。</p>
           <label class="field">图片 Agent 调用方式<select class="input" name="agentMode"${kind === "chat" ? "" : " disabled"}>
             ${option("native", "原生工具调用", item.agentMode || "native")}${option("json", "JSON 计划（兼容）", item.agentMode || "native")}</select></label>
@@ -347,8 +403,8 @@ const workspaceCommercial = (() => {
       return page("AI 对话", `<div class="commercial-chat-layout">
         <form class="card commercial-compose commercial-chat-guest" id="guest-chat-form">
           <label class="sr-commercial" for="guest-chat-text">输入消息</label>
-          <textarea class="textarea" id="guest-chat-text" name="text" data-field="guest-chat" placeholder="输入你的问题，或告诉我你想生成什么图片" maxlength="12000" required>${escape(ui.guestChatPrompt || "")}</textarea>
-          <div class="row"><button class="btn btn-primary" type="submit">发送</button></div>
+          <textarea class="textarea" id="guest-chat-text" name="text" data-field="guest-chat" data-ai-send placeholder="输入你的问题，或告诉我你想生成什么图片" maxlength="12000" required>${escape(ui.guestChatPrompt || "")}</textarea>
+          <div class="row"><button class="btn btn-primary" type="submit" aria-keyshortcuts="Control+Enter" title="Ctrl+Enter 发送">发送</button></div>
         </form>
       </div>`, "chat");
     }
@@ -369,16 +425,16 @@ const workspaceCommercial = (() => {
           <label class="sr-commercial" for="commercial-chat-text">输入消息</label>
           <div class="commercial-agent-options">
             <label class="commercial-agent-switch"><input type="checkbox" id="commercial-chat-agent"${chat.agent ? " checked" : ""}${chat.request ? " disabled" : ""}>图片 Agent</label>
-            <label class="commercial-agent-switch" data-chat-web-search${chat.catalog.webSearch ? "" : " hidden"}><input type="checkbox" id="commercial-chat-web-search"${chat.webSearch ? " checked" : ""}${chat.request ? " disabled" : ""}>联网搜索</label>
+            <label class="commercial-agent-switch" title="勾选后主动查找；也可以直接输入「联网搜索……」" data-chat-web-search${chat.catalog.webSearch ? "" : " hidden"}><input type="checkbox" id="commercial-chat-web-search"${chat.webSearch ? " checked" : ""}${chat.request ? " disabled" : ""}>联网搜索</label>
             <div id="commercial-chat-agent-tools"${chat.agent ? "" : " hidden"}>${agentTools()}</div>
           </div>
           <div id="commercial-chat-attachments">${attachmentList()}</div>
           <input type="file" id="commercial-chat-file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
-          <textarea class="textarea" id="commercial-chat-text" name="text" placeholder="${chatPlaceholder()}" maxlength="12000" required>${escape(chat.draft)}</textarea>
+          <textarea class="textarea" id="commercial-chat-text" name="text" data-ai-send placeholder="${chatPlaceholder()}" maxlength="12000" required>${escape(chat.draft)}</textarea>
           <div class="row-between"><p id="commercial-chat-notice" class="commercial-notice" role="status">${escape(chat.notice)}</p>
             <div class="row">${button("停止输出", "c-chat-stop", "", "secondary", chat.request ? "" : "hidden")}
               ${button("＋ 新对话", "c-chat-new", "", "secondary", chat.request ? "disabled" : "")}
-              <button class="btn btn-primary" id="commercial-chat-send" type="submit"${canSendChat() ? "" : " disabled"}>发送</button></div></div>
+              <button class="btn btn-primary" id="commercial-chat-send" type="submit" aria-keyshortcuts="Control+Enter" title="Ctrl+Enter 发送"${canSendChat() ? "" : " disabled"}>发送</button></div></div>
         </form>
       </section>
     </div><dialog class="commercial-asset-dialog" id="commercial-chat-asset-picker" aria-labelledby="commercial-chat-asset-title">
@@ -433,7 +489,7 @@ const workspaceCommercial = (() => {
 
   function chatPrice() {
     const model = chatModels().find(item => item.id === chat.modelId);
-    return model ? tokenRateText(model) : "请在后台设置上架语言模型。";
+    return model ? `${tokenRateText(model)}；${contextWindowText(model)}。长对话自动整理摘要，摘要用量计入本轮。` : "请在后台设置上架语言模型。";
   }
 
   function chatTitle() {
@@ -457,7 +513,7 @@ const workspaceCommercial = (() => {
       if (plan) anchored.add(plan.id);
       return `<article class="commercial-message commercial-${item.role === "user" ? "user" : "assistant"}">
       <strong>${escape(item.role === "user" ? "你" : item.modelName || "AI")}</strong>
-      <p${item.live ? ' data-stream-output aria-live="off"' : ""}>${escape(item.text || (item.live ? "正在回复…" : ""))}</p>
+      <p${item.live ? ' data-stream-output aria-live="off"' : ""}>${escape(item.live ? item.liveText || "正在回复…" : item.text)}</p>
       ${item.webSearch ? searchSources(item.webSearch, index) : ""}
       ${item.role === "user" ? messageAttachments(item.assetIds) : ""}
       ${item.role === "assistant" && item.text && !item.live && !plan ? button("用作 PPT 需求", "c-chat-to-ppt", index, "ghost") : ""}
@@ -477,10 +533,13 @@ const workspaceCommercial = (() => {
       try { url = new URL(item.url); } catch { return ""; }
       if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return "";
       return `<li><a href="${escape(url.href)}" target="_blank" rel="noopener noreferrer">[${position + 1}] ${escape(item.title)}</a>
-        <span class="meta">${escape(url.hostname)} · ${item.pageExcerpt ? "已读取页面" : "搜索摘要"}</span></li>`;
+        <span class="meta">${escape(url.hostname)} · ${item.pageExcerpt ? "已读取正文" : item.snippet || item.hasSnippet ? "仅搜索摘要" : "链接暂未读到正文"}</span></li>`;
     }).join("");
     return `<details class="commercial-search-sources" data-prompt="sources:${index}" ${expanded ? "open" : ""}><summary>${result.reused ? "沿用的联网来源" : "联网来源"}（${result.sources.length}）</summary>
-      <p class="meta">${escape(result.query)}</p><ol>${links}</ol></details>`;
+      <p class="meta">检索主题：${escape(result.query)}</p>
+      ${result.queries?.length ? `<p class="meta">检索词：${result.queries.map(escape).join("；")}</p>` : ""}
+      ${result.missingTargets?.length ? `<p class="meta">尚缺资料：${result.missingTargets.map(escape).join("、")}</p>` : ""}
+      <ol>${links}</ol></details>`;
   }
 
   function messageAttachments(ids) {
@@ -560,7 +619,7 @@ const workspaceCommercial = (() => {
     return `<li class="commercial-plan-job"><div class="commercial-plan-job-status">
       <b>${escape(job.label || "图片任务")}</b><span class="meta" role="status">${jobProgress(job)}</span>
       ${delivered && job.width && job.height ? `<span class="meta">${escape(job.width)} × ${escape(job.height)} px</span>` : ""}
-      ${job.error ? `<span class="commercial-job-error">${escape(job.error)}</span>` : ""}</div>
+      ${job.error ? `<span class="commercial-job-error">${escape(job.error)}</span>` : ""}${jobErrorLink(job)}</div>
       ${delivered ? resultImage(job.assetId, asset, isGif ? "下载片段 GIF" : "") : jobPreview(job)}
     </li>`;
   }
@@ -568,7 +627,7 @@ const workspaceCommercial = (() => {
   function planResult(result) {
     if (result.tool === "generate_gif_sequence") {
       if (result.asset?.id) return `<li class="commercial-plan-job"><b>完整 GIF</b>${resultImage(result.asset.id, result.asset, "下载完整 GIF")}</li>`;
-      if (result.error) return `<li class="commercial-plan-job"><span class="commercial-job-error">${escape(result.error)}</span></li>`;
+      if (result.error) return `<li class="commercial-plan-job"><details data-prompt="gif-sequence-error"><summary>查看合成错误</summary><p class="commercial-job-error">${escape(result.error)}</p></details></li>`;
     }
     if (result.asset?.id) return `<li class="commercial-plan-job"><b>${escape(result.asset.name || "处理结果")}</b>${resultImage(result.asset.id, result.asset)}</li>`;
     if (typeof result.text === "string") return `<li class="commercial-plan-job"><b>提取结果</b><p class="commercial-job-text">${escape(result.text || "未识别到文字。")}</p></li>`;
@@ -601,7 +660,7 @@ const workspaceCommercial = (() => {
       }
     } else {
       const live = messages.querySelector("[data-stream-output]");
-      if (live) live.textContent = chat.messages.at(-1)?.text || "正在回复…";
+      if (live) live.textContent = chat.messages.at(-1)?.liveText || "正在回复…";
     }
     if (scroll || wasAtEnd) messages.scrollTop = messages.scrollHeight;
     document.querySelector("#commercial-chat-title").textContent = chatTitle();
@@ -924,7 +983,10 @@ const workspaceCommercial = (() => {
     drawChat({scroll: false});
     try {
       const result = await api(`chat/conversations/${encodeURIComponent(active)}/plans/${encodeURIComponent(id)}/${action}`, "POST", {});
-      if (chat === instance && account?.id === activeOwner) applyChatWallet(result);
+      if (chat === instance && account?.id === activeOwner) {
+        applyChatWallet(result);
+        if (result.jobs?.length) scheduleJobs();
+      }
       if (!current()) return;
       updatePlan(result.plan);
       for (const job of result.jobs || []) instance.jobs.set(job.id, job);
@@ -1015,6 +1077,10 @@ const workspaceCommercial = (() => {
     const request = { controller, id: requestId };
     const userMessage = { role: "user", text, assetIds };
     const assistant = { role: "assistant", text: "", live: true, modelName: model.name };
+    const reveal = revealText(text => {
+      assistant.liveText = text;
+      if (chat === instance && owner === account?.id && ui.route === "chat") drawChat({thread: false, scroll: false});
+    });
     let remoteIssue = "";
     let fetchStarted = false;
     instance.request = request;
@@ -1043,9 +1109,13 @@ const workspaceCommercial = (() => {
           ...(webSearch ? {webSearch: true} : {}), ...(agent ? {agent, assetIds, creativeSkill, ...(imageModelId ? {imageModelId} : {})} : {}) }),
         signal: controller.signal
       });
-      await parseStream(response, event => {
+    await parseStream(response, event => {
         if (chat !== instance || owner !== account?.id) return;
         if (event.type === "error") remoteIssue = event.message || "模型回复失败。";
+        if (event.type === "memory") {
+          instance.notice = event.state === "compacting" ? "正在整理较早对话，保留关键决定和纠正…" : "已载入会话摘要，继续回复…";
+          drawChat({thread: false});
+        }
         if (event.type === "web-search-start") {
           instance.notice = "正在搜索公开资料…";
           drawChat({thread: false});
@@ -1057,7 +1127,7 @@ const workspaceCommercial = (() => {
         }
         if (event.type === "delta" || event.type === "replace") {
           assistant.text = (event.type === "delta" ? assistant.text : "") + String(event.text || "");
-          drawChat({ thread: false });
+          reveal.set(assistant.text);
         }
         if (event.type === "plan" && event.plan) {
           assistant.turnId = event.plan.turnId;
@@ -1066,9 +1136,11 @@ const workspaceCommercial = (() => {
         }
         if (event.type === "done" && event.wallet) {
           applyChatWallet(event.wallet);
-          remoteIssue ||= tokenBillingText(event.billing);
+          remoteIssue = [remoteIssue, tokenBillingText(event.billing)].filter(Boolean).join(" ");
         }
       });
+      await reveal.drain();
+      if (chat !== instance || owner !== account?.id) return;
       instance.interrupted = null;
       instance.notice = remoteIssue || "回复已保存。";
       if (!assistant.text && !assistant.webSearch) instance.messages = instance.messages.filter(message => message !== assistant);
@@ -1088,6 +1160,7 @@ const workspaceCommercial = (() => {
         }
       }
     } finally {
+      reveal.flush();
       assistant.live = false;
       if (chat === instance && owner === account?.id) {
         instance.request = null;
@@ -1143,7 +1216,8 @@ const workspaceCommercial = (() => {
     form.querySelector("[data-token-prices]").hidden = image;
     for (const key of ["maxReferences", "price", "sizes"]) form.elements[key].disabled = !image;
     for (const key of ["maxReferences", "price"]) form.elements[key].required = image;
-    for (const key of ["inputRate", "outputRate", "agentMode"]) form.elements[key].disabled = image;
+    for (const key of ["inputRate", "outputRate", "agentMode", "contextWindowTokens"]) form.elements[key].disabled = image;
+    form.elements.contextWindowTokens.closest('label').hidden = image;
   }
 
   function suggestModelKind(form) {
@@ -1236,6 +1310,7 @@ const workspaceCommercial = (() => {
       body.maxReferences = Number(values.maxReferences);
     } else {
       body.agentMode = values.agentMode;
+      body.contextWindowTokens = values.contextWindowTokens ? Number(values.contextWindowTokens) : null;
       if (values.inputRate !== "" || values.outputRate !== "" || body.enabled) {
         if (values.inputRate === "" || values.outputRate === "") throw new Error("请分别填写输入和输出 Token 单价。");
         body.tokenRates = {input: parsePoints(values.inputRate), output: parsePoints(values.outputRate)};
@@ -1255,7 +1330,7 @@ const workspaceCommercial = (() => {
     const values = formValues(form);
     const enabled = Boolean(values.enabled);
     const entries = (admin.discovered.get(editor.connectionId) || []).filter(item => editor.selected.has(item.id))
-      .map(item => ({modelId: item.id, name: (item.name || item.id).slice(0, 80)}));
+      .map(item => ({modelId: item.id, name: (item.name || item.id).slice(0, 80), contextWindowTokens: item.contextWindowTokens}));
     if (!entries.length) throw new Error("请从目录勾选要导入的模型。");
     const body = {action: "import", connectionId: editor.connectionId, kind: editor.kind, enabled, entries, pointScale: POINT_SCALE,
       capabilities: new FormData(form).getAll("capabilities")};
@@ -1591,6 +1666,7 @@ const workspaceCommercial = (() => {
     if (form.dataset.commercial === "batch-model" && element.name !== "capabilities") return;
     if (element.name === "connectionId") {
       form.elements.modelSearch.value = "";
+      form.elements.contextWindowTokens.value = "";
       form.querySelector("[data-discovery]").textContent = "";
       drawDirectory(form);
       updatePublishControl(form);
@@ -1599,6 +1675,9 @@ const workspaceCommercial = (() => {
       const previousId = form.elements.modelId.value;
       const entry = (admin.discovered.get(form.elements.connectionId.value) || []).find(item => item.id === element.value);
       form.elements.modelId.value = element.value;
+      if (previousId !== element.value || !form.elements.contextWindowTokens.value) {
+        form.elements.contextWindowTokens.value = entry?.contextWindowTokens || "";
+      }
       suggestModelKind(form);
       if (!form.elements.name.value.trim() || form.elements.name.value === previousId || form.dataset.suggestedName === form.elements.name.value) {
         form.elements.name.value = (entry?.name || element.value).slice(0, 80);
@@ -1606,7 +1685,10 @@ const workspaceCommercial = (() => {
       }
       form.dataset.dirty = "true";
     }
-    if (element.name === "modelId") suggestModelKind(form);
+    if (element.name === "modelId") {
+      form.elements.contextWindowTokens.value = "";
+      suggestModelKind(form);
+    }
     if (element.name === "kind") {
       form.dataset.manualKind = "true";
       updateModelKind(form, element.value);
@@ -1646,6 +1728,7 @@ const workspaceCommercial = (() => {
     adminNavigation,
     chatView,
     searchSources,
+    revealText,
     seedChatDraft,
     readStream: parseStream,
     receiveImageJobs,

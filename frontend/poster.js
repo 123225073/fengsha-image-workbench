@@ -32,11 +32,24 @@ function posterPresetFor(poster, format) {
   return ui.file["poster-product"] ? "lifestyle" : "campaign";
 }
 
-function posterImagePrompt(format, poster, imageIds, description, shot) {
+function posterReferenceInstructions(imageIds) {
   const productId = ui.file["poster-product"]?.id;
-  const references = imageIds.map((id, index) => id === productId
+  return imageIds.map((id, index) => id === productId
     ? `参考图 ${index + 1} 是唯一的商品外观依据。保持轮廓、结构、部件位置、比例、材质、颜色、包装与已有标识；不要根据文字猜测看不见的部件。`
     : `参考图 ${index + 1} 只用于配色、灯光、构图或环境，不能替换主商品，也不复制其中的商品、标识或文字。`);
+}
+
+function posterFullImagePrompt(format, imageIds, prompt) {
+  return [
+    `直接生成一张完整的${format.name}，画幅 ${format.ratio}，目标 ${format.width}×${format.height} 像素。`,
+    ...posterReferenceInstructions(imageIds),
+    `按以下提示词完成画面及文字排版：\n${prompt}`,
+    `按此尺寸独立构图，保留主体和指定文案的安全边距。未指定构图时可参考：${format.scene}。`,
+    "准确呈现明确指定的画面文字。未要求呈现的文字、参数、价格和活动信息留空。"
+  ].join("\n");
+}
+
+function posterImagePrompt(format, poster, imageIds, description, shot) {
   const hasCopy = [poster.title, poster.subtitle, poster.date].some(value => value?.trim()) || ui.file.logo || ui.file.qr;
   const layout = shot === "studio"
     ? "保持商品完整和安全边距。按画幅调整陈列与构图，优先使用参考图确实提供的商品角度。"
@@ -44,7 +57,7 @@ function posterImagePrompt(format, poster, imageIds, description, shot) {
   return [
     `制作一张可直接用作${format.name}的商业图，画幅 ${format.ratio}，目标 ${format.width}×${format.height} 像素。`,
     `用户需求（用于确定主体和场景，文案稍后排版）：${description || "突出参考图中的商品"}`,
-    ...references, layout,
+    ...posterReferenceInstructions(imageIds), layout,
     "产品应有可靠的接触面，光向和投影一致，透视合理，边缘自然。不要新增任何营销文字、Logo、水印或二维码；商品原有标识除外。不得擅自添加价格、性能、规格、认证、销量或活动承诺。"
   ].join("\n");
 }
@@ -74,9 +87,12 @@ function posterPreviewSource() {
 
 function posterRenderOptions(format, visual) {
   const poster = state.poster;
+  const options = {width: format.width, height: format.height, photo: uploadDescriptor(visual), fitted: true};
+  if (visual.posterPromptOnly || assetGenerationJob(visual.id)?.context?.posterPromptOnly) {
+    return {...options, promptOnly: true};
+  }
   const cleanProduct = posterPresetFor(poster, format) === "studio";
-  return {width: format.width, height: format.height,
-    photo: uploadDescriptor(visual), layout: poster.visuals?.[format.id] ? format.layout : "bottom", fitted: true,
+  return {...options, layout: poster.visuals?.[format.id] ? format.layout : "bottom",
     title: cleanProduct ? "" : poster.title, subtitle: cleanProduct ? "" : poster.subtitle,
     date: cleanProduct ? "" : poster.date, logo: cleanProduct ? "" : ui.file.logo?.url,
     qr: cleanProduct ? "" : ui.file.qr?.url};
@@ -97,8 +113,9 @@ function posterFilename() {
 function posterOutput(format, visual = posterVisual(format)) {
   if (!visual) return null;
   const options = posterRenderOptions(format, visual);
-  return {name: `${state.poster.title || "海报"} · ${format.name}`,
-    filename: `${posterFilename()}-${format.name}-${format.width}x${format.height}.png`,
+  const title = options.promptOnly ? "海报" : state.poster.title || "海报";
+  return {name: `${title} · ${format.name}`,
+    filename: `${options.promptOnly ? "海报" : posterFilename()}-${format.name}-${format.width}x${format.height}.png`,
     render: () => workspaceRaster.poster(options)};
 }
 
@@ -126,10 +143,15 @@ function posterGallery(formats) {
       <div class="output-job-slot${asset ? "" : " is-placeholder"}" data-poster-job="${format.id}" data-asset="${esc(asset?.id || "")}">${outputJobStatus(job, asset?.id)}</div>
     </div>
     <div class="poster-result-info"><strong>${format.name}</strong><span class="meta">${format.width} × ${format.height} px</span></div>
-    ${asset ? `<div class="row">${button("下载", "poster-download", format.id, "secondary", `aria-label="下载${format.name}"`)}
-      ${button("编辑", "poster-edit", format.id, "ghost", `aria-label="编辑${format.name}"`)}</div>` : ""}
+    <div class="row">${asset ? button("下载", "poster-download", format.id, "secondary", `aria-label="下载${format.name}"`) +
+      button("编辑", "poster-edit", format.id, "ghost", `aria-label="编辑${format.name}"`) : ""}
+      <span data-poster-job-error="${format.id}" data-asset="${esc(asset?.id || "")}">${jobErrorLink(job)}</span></div>
   </article>`;
   }).join("");
+}
+
+function posterStageJobStatus(job) {
+  return job && job.status !== "succeeded" ? `${jobProgress(job)}${jobErrorLink(job)}${jobPreview(job)}` : "";
 }
 
 function selectPosterFormat(id) {
@@ -165,20 +187,24 @@ function posterAdvisorView(poster) {
     ${history.length ? `<label class="field">切换历史对话<select class="input" data-field="poster-chat-history" ${busy ? "disabled" : ""}>
       <option value="">当前对话</option>${history.map((item, index) => `<option value="${index}">${esc(item.discussion?.[0]?.question.slice(0, 35) || "海报草稿")}</option>`).join("")}</select></label>` : ""}
     ${modelSelect("poster-language-model", "chat", "text", poster.languageModel, "语言模型")}
+    ${researchModeField("poster-search-mode", poster.searchMode, busy ? "disabled" : "")}
     <div class="poster-discussion" role="log" aria-label="海报需求沟通">
-      ${turns.map(turn => `<p><b>你</b>${esc(turn.question)}</p><p><b>AI</b>${esc(turn.reply)}</p>`).join("")}
+      ${turns.map((turn, index) => `<p><b>你</b>${esc(turn.question)}</p><article><b>AI</b>${pptReplyText(turn.reply)}
+        ${turn.webSearch ? workspaceCommercial.searchSources(turn.webSearch, "poster-turn-" + index) : ""}</article>`).join("")}
       ${!busy && !turns.length ? '<p class="meta">告诉 AI 海报用在哪里、要突出什么。</p>' : ""}
-      <p data-poster-stream${busy ? "" : " hidden"}>${esc(ui.posterReply || "正在整理…")}</p>
+      <p data-poster-stream aria-live="off"${busy ? "" : " hidden"}>${esc(ui.posterReply || "正在整理…")}</p>
     </div>
-    <label class="field">想做什么海报<textarea class="textarea" data-field="poster-message" maxlength="2000" ${busy ? "disabled" : ""}
-      placeholder="例如，给新款茶饮做门店和朋友圈宣传，我有一张产品图。">${esc(poster.message)}</textarea></label>
-    <div class="row">${button("发送给 AI", "poster-discuss", "", "primary", busy ? "disabled" : "")}
+    <label class="field">想做什么海报<textarea class="textarea" data-field="poster-message" data-ai-send="poster-discuss" maxlength="2000" ${busy ? "disabled" : ""}
+      placeholder="例如，联网核实这款产品的型号和参数，再做一组宣传图。">${esc(poster.message)}</textarea></label>
+    <div class="row">${button("发送给 AI", "poster-discuss", "", "primary", (busy ? "disabled " : "") + aiSendShortcut)}
       ${button("整理设计方案", "poster-plan", "", "secondary", !turns.length || busy ? "disabled" : "")}</div>
-    ${brief ? `<div class="poster-proposal stack"><h3>${esc(brief.title || "海报设计方案")}</h3>
-      ${brief.subtitle ? `<p>${esc(brief.subtitle)}</p>` : ""}${brief.date ? `<p>${esc(brief.date)}</p>` : ""}
-      <p class="meta">${esc(brief.prompt)}</p>
-      <p class="meta">${posterFormats.filter(format => brief.formats.includes(format.id)).map(format => format.name).join("、")}</p>
-      ${button("采用方案并查看参数", "poster-apply", "", "secondary", busy ? "disabled" : "")}</div>` : ""}
+    ${brief ? `<section class="poster-proposal stack" data-poster-proposal><h3>海报设计方案</h3>
+      ${brief.promptVersion === 2 ? `<label class="field">完整生图提示词
+        <textarea class="textarea poster-plan-prompt" data-field="poster-plan-prompt" maxlength="4500" rows="8" ${busy ? "disabled" : ""}>${esc(brief.prompt)}</textarea>
+        <span class="meta">可直接改文案和排版。生成时使用这里的提示词与左侧勾选的尺寸。</span></label>` :
+      '<p class="meta">请重新整理这份旧方案，生成可直接出图的完整提示词。</p>'}
+      ${brief.webSearch ? workspaceCommercial.searchSources(brief.webSearch, "poster-plan") : ""}
+    </section>` : ""}
     <p class="meta">AI 沟通按实际 Token 计费。出图前会显示张数和费用。</p></div>`;
 }
 
@@ -190,16 +216,23 @@ function switchPosterChat(index = null) {
   if (index !== null && !next) return;
   if (poster.discussion?.length || poster.message?.trim() || poster.proposal) {
     history.unshift({discussion: poster.discussion || [], message: poster.message || "",
-      proposal: poster.proposal || null, fresh: Boolean(poster.advisorFresh)});
+      sessionId: poster.advisorSessionId ||= crypto.randomUUID(),
+      proposal: poster.proposal || null});
   }
   poster.advisorHistory = history.slice(0, 8);
   poster.discussion = next?.discussion || [];
+  poster.advisorSessionId = next?.sessionId || crypto.randomUUID();
   poster.message = next?.message || "";
   poster.proposal = next?.proposal || null;
-  poster.advisorFresh = next?.fresh ?? true;
   save();
   render();
   content.querySelector('[data-field="poster-message"]')?.focus({preventScroll: true});
+}
+
+function activePosterFormats() {
+  const documentId = state.poster.documentId;
+  return new Set(documentId ? live.allJobs.filter(job => job.scope === "poster" && activeJob(job) &&
+    job.context?.documentId === documentId).map(job => job.context.formatId || "main") : []);
 }
 
 function posterView() {
@@ -212,9 +245,12 @@ function posterView() {
   const showResults = poster.previewTab === "results" || (poster.previewTab !== "reference" && completed.length > 0);
   const count = new Set(posterReferenceTargets.map(target => ui.file[target]?.id || ui.file[target]?.url).filter(Boolean)).size;
   const advisor = poster.mode === "advisor";
-  const active = pending.has("poster") || scopeInProgress("poster");
+  const canGenerate = !advisor || poster.proposal?.promptVersion === 2;
+  const activeFormats = activePosterFormats();
+  const submitting = pending.has("poster");
   const job = live.jobs.find(item => item.scope === "poster" && item.context?.documentId === poster.documentId &&
     (item.context?.formatId || "main") === format.id);
+  const stageStatus = posterStageJobStatus(job);
   const languageBusy = pending.has("poster-advisor");
   return page("海报工作台", `<div id="poster-project-controls" class="poster-project-controls">${workspaceProjects.posterHistory()}</div>
   <div class="poster-studio"${workspaceProjects.posterSwitching() ? " inert" : ""}>
@@ -243,8 +279,8 @@ function posterView() {
       <div class="poster-stage-footer">
         <div><strong>${format.name}</strong><p class="meta">${format.width} × ${format.height} px · ${format.ratio}</p></div>
         <div class="row">${!showResults && source ? button("移除参考图", "detach-file", source, "ghost") : ""}
-          ${advisor ? "" : button(posterVisual(format) ? "重新生成此尺寸" : "生成此尺寸", "poster-generate", format.id, "secondary", active || languageBusy ? "disabled" : "")}</div>
-        ${job && job.status !== "succeeded" ? `<div class="poster-stage-progress">${jobProgress(job)}${job.error ? `<p class="meta">${esc(job.error)}</p>` : ""}${jobPreview(job)}</div>` : ""}
+          ${canGenerate ? button(activeFormats.has(format.id) ? "此尺寸已提交" : posterVisual(format) ? "重新生成此尺寸" : "生成此尺寸", "poster-generate", format.id, "secondary", submitting || activeFormats.has(format.id) || languageBusy ? "disabled" : "") : ""}</div>
+        <div class="poster-stage-progress" data-poster-stage-status="${format.id}" data-asset="${esc(posterVisual(format)?.id || "")}"${stageStatus ? "" : " hidden"}>${stageStatus}</div>
       </div>
     </section>
     <aside class="card stack poster-controls">
@@ -260,18 +296,19 @@ function posterView() {
       <label class="field">出图方向<select class="input" data-field="poster-preset">
         ${Object.entries(posterPresets).map(([key, preset]) => `<option value="${key}" ${(poster.preset || "auto") === key ? "selected" : ""}>${preset.name}</option>`).join("")}
       </select><span class="meta" data-poster-preset-note>${(posterPresets[poster.preset] || posterPresets.auto).note}</span></label>
-      ${advisor ? posterAdvisorView(poster) : `${imagePromptFields(poster, "画面描述", "描述主体、场景和风格", "poster-prompt")}
-        <div class="poster-copy-fields">
-          <label class="field">活动标题<input class="input" data-field="poster-title" maxlength="30" value="${esc(poster.title)}"></label>
-          <label class="field">活动副标题<input class="input" data-field="poster-subtitle" maxlength="40" value="${esc(poster.subtitle)}"></label>
-          <label class="field">活动时间<input class="input" data-field="poster-date" maxlength="32" value="${esc(poster.date)}" placeholder="例如 4 月 20 日 14:00"></label>
+      ${advisor ? posterAdvisorView(poster) : `${imagePromptFields(poster, poster.promptOnly ? "完整生图提示词" : "画面描述", poster.promptOnly ? "描述画面、要显示的文字和排版" : "描述主体、场景和风格", "poster-prompt")}
+        <label class="commercial-check"><input type="checkbox" data-field="poster-prompt-only" ${poster.promptOnly ? "checked" : ""}>以完整提示词出图</label>
+        ${poster.promptOnly ? '<p class="meta">图中文字和排版以提示词为准。</p>' : `<div class="poster-copy-fields">
+          <label class="field">活动标题（选填）<input class="input" data-field="poster-title" maxlength="30" value="${esc(poster.title)}"></label>
+          <label class="field">活动副标题（选填）<input class="input" data-field="poster-subtitle" maxlength="40" value="${esc(poster.subtitle)}"></label>
+          <label class="field">活动时间（选填）<input class="input" data-field="poster-date" maxlength="32" value="${esc(poster.date)}" placeholder="例如 4 月 20 日 14:00"></label>
         </div>
-        <div class="poster-marks">${posterUpload("logo", "品牌标志")}${posterUpload("qr", "二维码")}</div>`}
+        <div class="poster-marks">${posterUpload("logo", "品牌标志")}${posterUpload("qr", "二维码")}</div>`}`}
       </div>
       <div class="stack poster-output">
-        ${advisor ? '<p class="meta">整理并采用设计方案后，可以确认参数和生成海报。</p>' : modelSelect("poster-model", "image", count > 1 ? "multiReference" : count ? "reference" : "generate", poster.model)}
+        ${canGenerate ? modelSelect("poster-model", "image", count > 1 ? "multiReference" : count ? "reference" : "generate", poster.model) : '<p class="meta">整理设计方案后，可在这里确认费用并生成。</p>'}
         ${scopeStatus("poster")}
-        ${advisor ? "" : button("生成所选尺寸", "poster-generate", "", "primary", !chosen.length || active || languageBusy ? "disabled" : "")}
+        ${canGenerate ? button(advisor ? "确认费用并生成" : "生成所选尺寸", "poster-generate", "", "primary", !chosen.some(format => !activeFormats.has(format.id)) || submitting || languageBusy ? "disabled" : "") : ""}
         <div class="row">${button("保存所选到素材", "save-poster", "", "ghost", chosen.some(posterVisual) && !ui.uploading ? "" : "disabled")}</div>
       </div>
     </aside>
@@ -287,25 +324,35 @@ function updatePosterPreview() {
 
 function createPosterVisual(id) {
   if (ui.uploading) return notify("正在添加素材，请稍等。");
-  const formats = id ? posterFormats.filter(item => item.id === id) : selectedPosterFormats();
-  if (!formats.length) return notify("请先勾选海报尺寸。");
+  const selected = id ? posterFormats.filter(item => item.id === id) : selectedPosterFormats();
+  if (!selected.length) return notify("请先勾选海报尺寸。");
   if (!requireAccount(() => createPosterVisual(id))) return;
-  if (scopeInProgress("poster")) return notify("当前海报任务正在处理，可在生成任务中查看进度。");
+  const active = activePosterFormats();
+  const formats = selected.filter(format => !active.has(format.id));
+  if (!formats.length) return notify("所选尺寸已提交，可在「生成任务」查看进度。");
   const poster = state.poster;
-  if (poster.mode === "advisor") return notify("请先整理并采用 AI 设计方案。");
+  const advisor = poster.mode === "advisor";
+  if (advisor && poster.proposal?.promptVersion !== 2) return notify("请先整理设计方案。");
+  const promptOnly = advisor || poster.promptOnly;
   const imageIds = posterReferences();
   const title = poster.title?.trim();
-  const description = poster.prompt?.trim() || poster.subtitle?.trim() || title;
+  const description = advisor ? poster.proposal.prompt?.trim() : poster.prompt?.trim() || (promptOnly ? "" : poster.subtitle?.trim() || title);
+  if (advisor && !description) return notify("请填写完整生图提示词。");
   if (!description && !imageIds.length) return notify("请填写画面描述或海报文案，也可以添加参考图。");
   const model = modelFor("image", imageIds.length > 1 ? "multiReference" : imageIds.length ? "reference" : "generate", poster.model).selected;
   if (model && imageIds.length > model.maxReferences) return notify(`当前模型最多接收 ${model.maxReferences} 张参考图。`);
   const inputs = formats.map(format => {
+    const input = {label: `海报 · ${format.name}`, size: `${format.width}x${format.height}`, imageIds};
+    if (promptOnly) return {...input, context: {formatId: format.id, posterPromptOnly: true},
+      prompt: posterFullImagePrompt(format, imageIds, description || "突出参考图中的商品")};
     const shot = posterPresetFor(poster, format);
-    return {label: `海报 · ${format.name}`, size: `${format.width}x${format.height}`, imageIds,
+    return {...input,
       context: {formatId: format.id, posterShot: shot},
       prompt: posterImagePrompt(format, poster, imageIds, description, shot)};
   });
-  return confirmImages("poster", model, inputs, () => { poster.previewTab = "results"; }, null, formats.map(format => format.name).join("、"));
+  const skipped = selected.length - formats.length;
+  return confirmImages("poster", model, inputs, () => { poster.previewTab = "results"; }, null,
+    formats.map(format => format.name).join("、"), skipped ? `${skipped} 个尺寸已在排队或生成，本次不会重复提交。` : "");
 }
 
 async function outputPosters(store) {
@@ -360,40 +407,71 @@ async function posterAdvisor(plan = false) {
   if (!model) return notify("请先在后台设置上架语言模型。");
   if (!plan && !message) return notify("请先输入要沟通的需求。");
   const discussion = poster.discussion || [];
+  const searchMode = poster.searchMode || "auto";
   const owner = identity;
   const request = {modelId: model.id, tokenRates: model.tokenRates, requestId: crypto.randomUUID(),
-    mode: plan ? "plan" : "discuss", message, transcript: discussion.slice(-8).map(turn =>
-      `用户：${turn.question}\nAI：${turn.reply}`).join("\n").slice(-5000),
-    title: poster.advisorFresh ? "" : poster.title, subtitle: poster.advisorFresh ? "" : poster.subtitle,
-    date: poster.advisorFresh ? "" : poster.date,
-    prompt: [poster.advisorFresh ? "" : poster.prompt || "",
+    sessionId: poster.advisorSessionId ||= crypto.randomUUID(),
+    webSearch: searchMode === "auto" ? undefined : searchMode === "always",
+    history: discussion.map(({question, reply}) => ({question, reply})),
+    mode: plan ? "plan" : "discuss", message,
+    prompt: [
       `出图方向：${(posterPresets[poster.preset] || posterPresets.auto).name}。`,
       "产品主图用于还原外观；场景图只用于风格。构图随尺寸变化。卖点、参数、价格无来源时先询问，不补写。"
     ].filter(Boolean).join("\n"),
-    ...posterOptimizationContext(poster), formats: selectedPosterFormats().map(format => format.id),
+    ...posterOptimizationContext({preset: poster.preset}), formats: selectedPosterFormats().map(format => format.id),
     catalog: posterFormats.map(format => ({id: format.id, label: format.name, size: `${format.width}×${format.height}`}))};
+  save(); // Persist the session ID before a request can fail or the page can reload.
   pending.set("poster-advisor", true);
   ui.posterReply = "";
   if (ui.route === "poster") render();
+  const showProgress = text => {
+    const target = ui.route === "poster" && content.querySelector("[data-poster-stream]");
+    if (target) {
+      const log = target.parentElement;
+      const follow = log.scrollHeight - log.clientHeight - log.scrollTop < 40;
+      target.textContent = text;
+      if (follow) log.scrollTop = log.scrollHeight;
+    }
+  };
+  const reveal = plan ? null : workspaceCommercial.revealText(text => {
+    if (owner !== identity || poster !== state.poster) return;
+    ui.posterReply = text;
+    showProgress(text);
+  });
+  let raw = "";
+  let planReady = false;
   try {
     const result = await streamLanguage("poster/advisor", request, delta => {
       if (owner !== identity || poster !== state.poster || plan) return;
-      ui.posterReply = (ui.posterReply + delta).slice(0, 1600);
-      const target = content.querySelector("[data-poster-stream]");
-      if (target) {
-        target.textContent = ui.posterReply;
-        target.parentElement.scrollTop = target.parentElement.scrollHeight;
-      }
+      raw = (raw + delta).slice(0, 32000);
+      reveal.set(raw);
+    }, event => {
+      if (owner !== identity || poster !== state.poster || ui.route !== "poster") return;
+      if (event.type === "started" && event.research) showProgress("正在查找公开资料…");
+      if (event.type === "memory") showProgress(event.state === "compacting" ? "正在整理较早对话，保留关键决定和纠正…" : "已载入会话摘要，继续回复…");
+      if (event.type === "web-search") showProgress(event.result.sources.length ?
+        "已获取联网来源，正在整理…" : "未取得可用联网资料，正在整理已有信息…");
     });
+    if (reveal) await reveal.drain();
     if (owner !== identity || poster !== state.poster || !result) return;
-    if (plan) poster.proposal = result.advice;
+    const sources = compactSearchResult(result.webSearch);
+    if (plan) {
+      poster.proposal = {...result.advice, webSearch: sources};
+      const suggested = poster.proposal.formats || [];
+      if (!poster.exports.length && suggested.length) {
+        poster.exports = suggested;
+        poster.selected = suggested[0];
+      }
+      planReady = poster.proposal.promptVersion === 2;
+    }
     else {
-      poster.discussion = [...discussion.slice(-11), {question: message, reply: result.advice}];
+      poster.discussion = [...discussion, {question: message, reply: result.advice, webSearch: sources}];
       poster.message = "";
       delete poster.proposal;
     }
     save();
   } finally {
+    reveal?.flush();
     if (owner === identity) {
       pending.delete("poster-advisor");
       ui.posterReply = "";
@@ -401,6 +479,9 @@ async function posterAdvisor(plan = false) {
         render();
         const log = content.querySelector(".poster-discussion");
         if (log) log.scrollTop = log.scrollHeight;
+        if (planReady && poster === state.poster && poster.mode === "advisor") {
+          content.querySelector("[data-poster-proposal]")?.scrollIntoView({block: "nearest"});
+        }
       }
     }
   }

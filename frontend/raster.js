@@ -121,7 +121,7 @@
     context.drawImage(image, alignRight ? x - width : x, bottom - height, width, height);
   }
 
-  async function poster({ width, height, photo, layout = "bottom", fitted = false, title, subtitle, date, logo, qr }) {
+  async function poster({ width, height, photo, layout = "bottom", fitted = false, promptOnly = false, title, subtitle, date, logo, qr }) {
     const [background, logoImage, qrImage] = await Promise.all([
       loadImage(photo?.url), loadImage(logo), loadImage(qr)
     ]);
@@ -141,6 +141,7 @@
         context.drawImage(background, x, (height - drawnHeight) / 2, drawnWidth, drawnHeight);
       } else drawCover(context, background, photo.crop, width, height);
     }
+    if (promptOnly) return png(context);
 
     const left = layout === "left";
     const top = layout === "top";

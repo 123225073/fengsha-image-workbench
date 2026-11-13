@@ -23,6 +23,11 @@ function tokenRateText(model) {
   return rates ? `输入 ${points(rates.input)} / 输出 ${points(rates.output)} 积分每百万 Token` : "待设置 Token 单价";
 }
 
+function contextWindowText(model) {
+  const size = Number(model?.contextWindowTokens || 65536).toLocaleString();
+  return model?.contextWindowSource === "configured" ? `上下文 ${size} Token` : `上下文容量未确认，暂按 ${size} Token 保守估算`;
+}
+
 function tokenBillingText(billing) {
   if (billing?.status === "unknown") return "上游用量待核对，预留积分暂未结算。";
   if (billing?.usage) return `输入 ${billing.usage.input} / 输出 ${billing.usage.output} Token · 实扣 ${points(billing.charged)} 积分`;
@@ -32,7 +37,7 @@ function tokenBillingText(billing) {
 function modelSelect(field, kind, capability, value, name = "生成模型") {
   const {options, selected} = modelFor(kind, capability, value);
   return `<label class="field">${name}<select class="input" data-field="${field}" ${options.length ? "" : "disabled"}>
-    ${options.map(model => `<option value="${esc(model.id)}" ${selected?.id === model.id ? "selected" : ""}>${esc(model.name)} · ${kind === "image" ? points(model.price) + " 积分/张" : tokenRateText(model)}</option>`).join("") || "<option>暂无支持此操作的已上架模型</option>"}</select></label>`;
+    ${options.map(model => `<option value="${esc(model.id)}" ${selected?.id === model.id ? "selected" : ""}>${esc(model.name)} · ${kind === "image" ? points(model.price) + " 积分/张" : tokenRateText(model)}</option>`).join("") || "<option>暂无支持此操作的已上架模型</option>"}</select>${kind === "chat" && selected ? `<small>${contextWindowText(selected)}。长对话自动整理摘要，摘要用量计入本轮。</small>` : ""}</label>`;
 }
 
 function requireAccount(continuation = null) {
@@ -160,26 +165,31 @@ function confirmImages(scope, model, inputs, onSubmitted = null, submitTool = nu
     submitNote || "提交后可以在「生成任务」查看进度，已交付的图片会自动保存。", "确认生成", async () => {
       if (identity !== owner || pending.has(scope)) return;
       pending.set(scope, 0);
+      let submitted = false;
       try {
         await saveNow();
         if (identity !== owner || state[scope].documentId !== documentId) return;
+        submitted = true;
         const result = submitTool ? await submitTool(documentId) : await api("jobs", "POST", {requests});
-        if (identity !== owner || state[scope].documentId !== documentId) return;
+        if (identity !== owner) return;
         updateWallet(result);
+        for (const job of result.jobs) {
+          if (!live.jobs.some(item => item.id === job.id)) live.jobs.unshift(job);
+          if (!live.allJobs.some(item => item.id === job.id)) live.allJobs.unshift(job);
+        }
+        if (state[scope].documentId !== documentId || (scope === "ppt" && state.ppt.generationId !== generationId)) return;
         const tracked = new Map((state[scope].tracked || []).map(job => [job.id, job]));
         for (const job of result.jobs) {
           if (!tracked.has(job.id)) tracked.set(job.id, {id: job.id, ...job.context});
-          if (!live.jobs.some(item => item.id === job.id)) live.jobs.unshift(job);
-          if (!live.allJobs.some(item => item.id === job.id)) live.allJobs.unshift(job);
         }
         state[scope].tracked = [...tracked.values()];
         if (!state.projects.includes(scope)) state.projects.push(scope);
         onSubmitted?.();
-        await saveNow();
-        scheduleJobs(0);
+        save();
       } finally {
         if (identity === owner) {
           pending.delete(scope);
+          if (submitted) scheduleJobs();
           if (ui.route === scope || (scope === "image" && ui.route === "image-edit")) render();
         }
       }
@@ -264,7 +274,7 @@ async function applyJobs(result, owner) {
   const previousJobs = live.allJobs;
   const previous = JSON.stringify(live.jobs);
   const wasPptBusy = scopeInProgress("ppt");
-  const wasPosterBusy = scopeInProgress("poster");
+  const wasPosterActive = [...activePosterFormats()].sort().join(",");
   const loaded = ui.imageRecordsLoaded;
   const jobs = result.jobs.map(job => {
     if (job.hidden) live.hiddenJobs.add(job.id);
@@ -357,6 +367,15 @@ async function applyJobs(result, owner) {
         : posterFormatJob(slot.dataset.posterJob, slot.dataset.asset);
       slot.innerHTML = slot.hasAttribute("data-ppt-job") ? pptImageJobStatus(job, slot.dataset.asset) : outputJobStatus(job, slot.dataset.asset);
     }
+    for (const slot of content.querySelectorAll("[data-poster-job-error], [data-poster-stage-status]")) {
+      if (slot.hasAttribute("data-poster-job-error")) {
+        slot.innerHTML = jobErrorLink(posterFormatJob(slot.dataset.posterJobError, slot.dataset.asset));
+      } else {
+        const markup = posterStageJobStatus(posterFormatJob(slot.dataset.posterStageStatus, slot.dataset.asset));
+        slot.innerHTML = markup;
+        slot.hidden = !markup;
+      }
+    }
     for (const note of content.querySelectorAll("[data-ppt-page-status]")) {
       const markup = pptPageJobMessage(Number(note.dataset.pptPageStatus), note.dataset.asset);
       note.innerHTML = markup;
@@ -364,7 +383,7 @@ async function applyJobs(result, owner) {
     }
   }
   if ((changed && ui.route === "jobs") || (ui.route === "ppt" && wasPptBusy !== scopeInProgress("ppt")) ||
-      (ui.route === "poster" && (!loaded || wasPosterBusy !== scopeInProgress("poster"))) ||
+      (ui.route === "poster" && (!loaded || wasPosterActive !== [...activePosterFormats()].sort().join(","))) ||
       newlyFinished.some(entry => entry.scope === ui.route && ui.route !== "image") ||
       (ui.route === "image-edit" && (newImage || newlyFinished.some(entry => entry.scope === "image" && imageJobOperation(entry.job) === "edit")))) render();
   await workspaceCommercial.receiveImageJobs(live.allJobs);
@@ -400,6 +419,14 @@ function jobProgress(job) {
   return `<span class="job-progress">${activeJob(job) ? '<span class="job-spinner" aria-hidden="true"></span>' : ""}<strong>${esc(jobLabels[job.status] || job.status)}</strong>${jobElapsed(job)}</span>`;
 }
 
+function hasJobError(job) {
+  return job?.status === "failed" || job?.status === "unknown";
+}
+
+function jobErrorLink(job) {
+  return hasJobError(job) ? button("查看错误", "job-detail", job.id, "ghost", 'data-job-error') : "";
+}
+
 function assetGenerationJob(id) {
   return id ? live.jobs.find(job => job.assetId === id) : undefined;
 }
@@ -432,7 +459,7 @@ function pptPageJobMessage(index, assetId) {
   if (!job || !["unknown", "failed", "cancelled"].includes(job.status)) return "";
   const current = assetId ? "本页继续使用所选图片。" : "可在下方选择或上传页图。";
   return `<strong>本页生成${esc(jobLabels[job.status])}</strong><span>${esc(job.error || "此任务未交付新图片。")} ${current}</span>
-    ${button("查看生成任务", "open-jobs", "", "ghost")}`;
+    ${jobErrorLink(job) || button("查看任务详情", "job-detail", job.id, "ghost")}`;
 }
 
 function jobPreview(job) {
@@ -458,9 +485,10 @@ function scopeStatusMarkup(scope, operation) {
   if (operation && !jobs.length && tracked.every(item => (item.operation && item.operation !== operation) || live.jobs.some(job => job.id === item.id))) return "";
   const activeEdits = operation === "edit" ? jobs.filter(activeJob) : [];
   const latest = activeEdits.length ? activeEdits : jobs.slice(selectedPptPage || operation === "edit" ? -1 : -12);
-  const summary = latest.length ? latest.map(job => `${esc(job.label)} · ${jobProgress(job)}${job.status === "succeeded" && latest.length === 1 ? sizeDetail(job) : ""}`).join(" / ") : "已提交，正在同步进度";
+  const summary = latest.length ? latest.map(job => `<span class="workbench-job-entry">${esc(job.label)} · ${jobProgress(job)}${job.status === "succeeded" && latest.length === 1 ? sizeDetail(job) : ""}${jobErrorLink(job)}</span>`).join("") : "已提交，正在同步进度";
+  const recentEditError = operation === "edit" && jobs.findLast(hasJobError);
   const preview = jobs.findLast(job => job.previewVersion && job.status === "running");
-  const markup = `<div class="notice workbench-job-note"><span>${summary}</span>${button("查看任务", "open-jobs", "", "ghost")}</div>${jobPreview(preview)}`;
+  const markup = `<div class="notice workbench-job-note"><div>${summary}${recentEditError && !latest.includes(recentEditError) ? `<span class="workbench-job-entry">上次错误 · ${esc(recentEditError.label)} ${jobErrorLink(recentEditError)}</span>` : ""}</div>${button("查看任务", "open-jobs", "", "ghost")}</div>${jobPreview(preview)}`;
   if (scope === "poster" && jobs.length && jobs.length === tracked.length &&
       jobs.every(job => ["succeeded", "failed", "cancelled"].includes(job.status))) {
     const complete = jobs.filter(job => job.status === "succeeded").length;
@@ -478,7 +506,7 @@ function sizeDetail(job) {
 
 function jobsView() {
   if (!account) return page("生成任务", '<p class="empty"><a href="#account">登录后查看生成记录</a></p>', "jobs");
-  const rows = live.jobs.map(job => `<tr><td>${button(job.label, "job-detail", job.id, "ghost", 'data-job-title')}<br><small class="meta">${esc(job.id)}</small></td><td>${esc(job.modelName)}</td><td>${jobProgress(job)}${sizeDetail(job)}<br><small class="meta">${esc(job.error || job.review || "")}</small></td><td>${points(job.price)}</td><td>${button("详情", "job-detail", job.id, "ghost")}${job.assetId ? `<a class="btn btn-ghost" href="/api/assets/${esc(job.assetId)}/download">下载</a>` : ""}${job.status === "queued" ? button("取消", "cancel-live-job", job.id) : ""}${button("删除记录", "delete-live-job", job.id, "ghost")}</td></tr>`).join("");
+  const rows = live.jobs.map(job => `<tr><td>${button(job.label, "job-detail", job.id, "ghost", 'data-job-title')}<br><small class="meta">${esc(job.id)}</small></td><td>${esc(job.modelName)}</td><td>${jobProgress(job)}${sizeDetail(job)}<br><small class="meta">${esc(job.error || job.review || "")}</small></td><td>${points(job.price)}</td><td>${jobErrorLink(job) || button("详情", "job-detail", job.id, "ghost")}${job.assetId ? `<a class="btn btn-ghost" href="/api/assets/${esc(job.assetId)}/download">下载</a>` : ""}${job.status === "queued" ? button("取消", "cancel-live-job", job.id) : ""}${button("删除记录", "delete-live-job", job.id, "ghost")}</td></tr>`).join("");
   return page("生成任务", `<div class="card table-wrap"><table class="ds-table"><thead><tr><th>任务</th><th>模型</th><th>状态</th><th>积分</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>${rows ? "" : '<p class="meta">暂无生成记录。</p>'}</div>`, "jobs");
 }
 
@@ -496,8 +524,10 @@ async function openJobDetail(id) {
   dialog.dataset.request = request;
   const {job} = await api(`jobs/${encodeURIComponent(id)}`);
   if (owner !== identity || dialog.dataset.request !== request) return;
+  const sameJob = dialog.open && dialog.dataset.jobId === id;
   renderJobDetail(dialog, job);
   if (!dialog.open) dialog.showModal();
+  if (!sameJob) dialog.scrollTop = 0;
 }
 
 document.querySelector("#job-detail-dialog").addEventListener("close", event => {
@@ -523,20 +553,27 @@ function renderJobDetail(dialog, job) {
     ${item.available ? jobImage(item.id, index === 0 ? "输入原图" : "参考图") :
       `<p class="meta">${item.trashed ? "素材在回收站，可在「我的素材」恢复。" : "素材文件已不可用。"}</p>`}
     ${item.jobId ? button("查看来源任务", "job-detail", item.jobId, "ghost") : ""}</div>`).join("");
+  const error = hasJobError(job);
+  const errorMessage = job.error || (job.status === "unknown" ? "暂时无法确认上游结果。" : "没有返回具体错误信息。");
+  const nativeFormat = job.context?.outputMethod === "native" && job.context.outputFormat;
+  const alternative = {gif: "分镜合成", svg: "矢量描摹"}[nativeFormat];
+  const images = `<div class="job-detail-images">
+      <section class="stack"><h3>原图与参考图</h3>${inputs || '<p class="meta">此任务没有输入图片。</p>'}</section>
+      <section class="stack"><h3>成品</h3>${job.requestedSize ? `<p class="meta">目标 ${esc(studioSizeText(job.requestedSize))} px${job.width && job.height ? ` · 实际 ${job.width} × ${job.height} px` : ""}</p>` : ""}
+      ${job.context?.outputMethod === "sheet" && job.submittedSize ? `<p class="meta">上游分镜请求 ${esc(studioSizeText(job.submittedSize))} px${job.storyboardSize ? ` · 实际返回 ${esc(studioSizeText(job.storyboardSize))} px` : ""}</p>` : ""}
+      ${(job.assetAvailable ?? Boolean(job.assetId)) ? `<div class="job-detail-image">${jobImage(job.assetId, "任务成品", true)}</div>` :
+        `<p class="meta">${job.assetId ? "成品文件已不可用。" : "暂无成品。"}</p>`}</section></div>`;
   dialog.innerHTML = `<header class="row-between"><h2 id="job-detail-title">${esc(job.label)}</h2>
     ${button("关闭", "close-job-detail", "", "ghost")}</header>
     <div class="stack job-detail-body"><div><p>${jobProgress(job)} · ${esc(job.modelName)}</p>
     <p class="meta">${esc(statuses[job.status] || "")} ${esc(billing)}</p>
-    ${job.error ? `<p>${esc(job.error)}</p>` : ""}
+    ${error ? `<section class="job-error-detail"><h3>错误原因</h3><p>${esc(errorMessage)}</p>
+      ${alternative ? `<p class="meta">当前线路的原生格式未交付。可以在 AI 生图里选择「${alternative}」单独提交新任务。</p>` : ""}
+      ${job.status === "unknown" ? '<p class="meta">可提供下方编号给管理员核对。平台会保留原任务记录，避免自动重复出图。</p>' : ""}</section>` : job.error ? `<p>${esc(job.error)}</p>` : ""}
     ${job.review ? `<p class="meta">${esc(job.review)}</p>` : ""}
     <p class="meta">任务编号 ${esc(job.id)}${job.upstreamId ? ` · 上游编号 ${esc(job.upstreamId)}` : ""}</p></div>
     ${job.canCheckResult ? `<div>${button("继续核对百炼结果", "check-upscale-result", job.id)}<p class="meta">查询原任务，百炼结果保留 24 小时。</p></div>` : ""}
-    <div class="job-detail-images">
-      <section class="stack"><h3>原图与参考图</h3>${inputs || '<p class="meta">此任务没有输入图片。</p>'}</section>
-      <section class="stack"><h3>成品</h3><p class="meta">目标 ${esc(job.requestedSize.replace("x", " × "))} px${job.width && job.height ? ` · 实际 ${job.width} × ${job.height} px` : ""}</p>
-      ${job.context?.outputMethod === "sheet" && job.submittedSize ? `<p class="meta">上游分镜请求 ${esc(studioSizeText(job.submittedSize))} px${job.storyboardSize ? ` · 实际返回 ${esc(studioSizeText(job.storyboardSize))} px` : ""}</p>` : ""}
-      ${(job.assetAvailable ?? Boolean(job.assetId)) ? `<div class="job-detail-image">${jobImage(job.assetId, "任务成品", true)}</div>` :
-        `<p class="meta">${job.assetId ? "成品文件已不可用。" : "暂无成品。"}</p>`}</section></div>
+    ${error ? `<details><summary>查看输入图片与成品</summary>${images}</details>` : images}
     ${job.prompt ? `<details><summary>查看提示词</summary><p class="job-detail-prompt">${esc(job.prompt)}</p></details>` : ""}</div>`;
 }
 
@@ -614,10 +651,10 @@ function pptPrompt(ppt, index) {
   return `制作 16:9 中文演示文稿第 ${index + 1} 页。全套视觉风格：${style}。页标题：${title}。本页内容和布局：${detail}。如大纲提及其他模板、配色或字体，视觉风格以当前所选模板为准，保留本页结构和业务内容。以一个核心结论组织画面，标题、数据与标签清晰。技术页完整保留已确认的节点、分层、箭头方向和业务关系。保持画面留白与安全边距，不添加无来源的文字和数字。`;
 }
 
-function pptSearchSummary(result) {
+function compactSearchResult(result) {
   if (!result) return undefined;
-  return {...result, sources: (result.sources || []).map(({title, url, pageExcerpt}) =>
-    ({title, url, pageExcerpt: Boolean(pageExcerpt)}))};
+  return {...result, sources: (result.sources || []).map(({title, url, pageExcerpt, readStatus, provided, snippet}) =>
+    ({title, url, pageExcerpt: Boolean(pageExcerpt), readStatus, provided, hasSnippet: Boolean(snippet)}))};
 }
 
 function scrollPptConversation() {
@@ -712,15 +749,14 @@ function pptLanguageRequest(ppt, model, message = "") {
   const research = pptResearchRequest(ppt);
   if (!sameTopic) research.researchId = crypto.randomUUID();
   const previous = sameTopic ? ppt.discussion.slice(ppt.searchStart || 0) : [];
-  const lines = previous.slice(-12).map(({question, reply}) => `用户：${question}\nAI：${reply}`);
-  const searchQuestions = previous.slice(-4).map(turn => String(turn?.question || "").trim().slice(0, 600));
+  const history = previous.map(({question, reply}) => ({question: String(question || ""), reply: String(reply || "")}));
   const evidenceTurnIds = previous.filter(turn => turn.webSearch?.status === "ok" && Number.isSafeInteger(turn.evidenceTurnId))
     .slice(-4).reverse().map(turn => turn.evidenceTurnId);
   return {modelId: model.id, tokenRates: model.tokenRates, requestId: crypto.randomUUID(),
     sessionId: ppt.sessionId, projectId: state.activeProjectId || "",
     brief, style: ppt.style, level: ppt.level, templateGuide: workspacePptTemplates.outlineGuide(ppt.style),
-    assetIds: pptSlots.map(key => ui.file[key]?.id).filter(Boolean), transcript: lines.join("\n").slice(-4000),
-    searchQuestions, evidenceTurnIds, ...research};
+    assetIds: pptSlots.map(key => ui.file[key]?.id).filter(Boolean), history,
+    evidenceTurnIds, ...research};
 }
 
 function pptResearchRequest(ppt) {
@@ -741,7 +777,7 @@ async function streamLanguage(path, request, onDelta, onStatus) {
   await workspaceCommercial.readStream(response, event => {
     if (identity !== owner) return;
     if (event.type === "delta") onDelta(String(event.text || ""));
-    if (event.type === "started" || event.type === "web-search") onStatus?.(event);
+    if (["started", "web-search", "memory"].includes(event.type)) onStatus?.(event);
     if (event.type === "error") issue = new Error(event.message || "模型回复失败。");
     if (event.type === "done") result = event.result;
   });
@@ -750,7 +786,11 @@ async function streamLanguage(path, request, onDelta, onStatus) {
     updateWallet(result);
     balance.textContent = points(available());
   }
-  if (issue) throw issue;
+  if (issue) {
+    const billing = tokenBillingText(result?.billing);
+    if (billing) issue.message += " " + billing;
+    throw issue;
+  }
   if (!result) throw new Error("模型未交付完整结果。");
   return result;
 }
@@ -785,23 +825,33 @@ async function pptLanguageTask(ppt, path, request, apply, index = null) {
   live.pptReply = reply;
   pending.set("ppt", path);
   render();
+  const paint = text => {
+    if (owner !== identity || live.pptReply !== reply || state.ppt !== ppt) return;
+    reply.text = text;
+    const target = ui.route === "ppt" && (index === null || ppt.active === index) && content.querySelector("[data-ppt-stream-output]");
+    if (!target) return;
+    const follow = target.scrollHeight - target.clientHeight - target.scrollTop < 40;
+    target.textContent = pptStreamText(reply) || "正在整理首个页面…";
+    if (follow) target.scrollTop = target.scrollHeight;
+  };
+  const reveal = path === "outline" ? null : workspaceCommercial.revealText(paint);
+  let raw = "";
   try {
     const result = await streamLanguage("ppt/" + path, request, chunk => {
-      const limit = {discuss: 2400, outline: 32000, "revise-slide": 4500}[path];
-      if (reply.text.length >= limit) return;
-      reply.text = (reply.text + chunk).slice(0, limit);
-      const target = ui.route === "ppt" && state.ppt === ppt && content.querySelector("[data-ppt-stream-output]");
-      if (!target) return;
-      const follow = target.scrollHeight - target.clientHeight - target.scrollTop < 40;
-      target.textContent = pptStreamText(reply) || "正在整理首个页面…";
-      if (follow) target.scrollTop = target.scrollHeight;
+      const limit = {discuss: 32000, outline: 32000, "revise-slide": 4500}[path];
+      if (raw.length >= limit) return;
+      raw = (raw + chunk).slice(0, limit);
+      if (reveal) reveal.set(raw);
+      else paint(raw);
     }, event => {
-      reply.status = event.type === "started" ? (event.research ? "正在查找公开资料…" : "") :
+      reply.status = event.type === "memory" ? (event.state === "compacting" ? "正在整理较早对话，保留关键决定和纠正…" : "已载入会话摘要，继续回复…") :
+        event.type === "started" ? (event.research ? "正在查找公开资料…" : "") :
         event.result.sources.length ? `${event.result.reused ? "已沿用" : "已获取"} ${event.result.sources.length} 条联网来源，正在整理…` :
         "未取得可用联网资料，正在整理已有信息…";
       const target = ui.route === "ppt" && state.ppt === ppt && content.querySelector("[data-ppt-stream-status]");
       if (target && reply.status) target.textContent = reply.status;
     });
+    if (reveal) await reveal.drain();
     if (owner !== identity) return;
     if (state.ppt !== ppt) return;
     apply(result);
@@ -810,6 +860,7 @@ async function pptLanguageTask(ppt, path, request, apply, index = null) {
     const billing = tokenBillingText(result.billing);
     if (billing) notify(billing);
   } finally {
+    reveal?.flush();
     if (owner === identity) {
       if (live.pptReply === reply) live.pptReply = null;
       pending.delete("ppt");
@@ -841,7 +892,7 @@ async function discussPpt(searchNow = false) {
     if (request.brief !== ppt.brief.trim()) ppt.brief = request.brief;
     ppt.searchBrief = request.brief;
     ppt.discussion.push({question: message || ppt.brief.trim() || "请先帮我梳理所选资料。", reply: result.reply,
-      webSearch: pptSearchSummary(result.webSearch), evidenceTurnId: result.evidenceTurnId});
+      webSearch: compactSearchResult(result.webSearch), evidenceTurnId: result.evidenceTurnId});
     ppt.discussionDraft = "";
     ppt.maxStage = 0;
   });
@@ -858,10 +909,12 @@ async function revisePptPrompt() {
   const change = (edit.change || "").trim();
   if (!change) return notify("先写下这一页想怎么改。");
   const [title, detail] = ppt.outline[index];
-  await pptLanguageTask(ppt, "revise-slide", {modelId: model.id, tokenRates: model.tokenRates, requestId: crypto.randomUUID(),
-    title, detail, change, brief: ppt.brief.trim(), style: workspacePptTemplates.visualGuide(ppt.style), prompt: edit.prompt || pptPrompt(ppt, index),
-    ...pptResearchRequest(ppt)},
-  result => { edit.suggestion = result.prompt; edit.webSearch = result.webSearch; }, index);
+  const request = pptLanguageRequest(ppt, model);
+  const {modelId, tokenRates, requestId, brief, style, history, webSearch, researchId, evidenceTurnIds, sessionId, projectId} = request;
+  await pptLanguageTask(ppt, "revise-slide", {modelId, tokenRates, requestId, brief, history, webSearch,
+    researchId, evidenceTurnIds, sessionId, projectId,
+    title, detail, change, style: workspacePptTemplates.visualGuide(style), prompt: edit.prompt || pptPrompt(ppt, index)},
+  result => { edit.suggestion = result.prompt; edit.webSearch = compactSearchResult(result.webSearch); }, index);
 }
 
 async function makeOutline() {
@@ -879,7 +932,7 @@ async function makeOutline() {
       await pptLanguageTask(ppt, "outline", request, result => {
         resetDeck();
         ppt.outline = result.outline;
-        ppt.outlineWebSearch = pptSearchSummary(result.webSearch);
+        ppt.outlineWebSearch = compactSearchResult(result.webSearch);
         ppt.stage = ppt.maxStage = 1;
       });
     });

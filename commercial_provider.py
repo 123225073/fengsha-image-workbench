@@ -38,6 +38,10 @@ MAX_RESPONSE = 96 * 1024 * 1024
 MAX_CHAT = 2 * 1024 * 1024
 TOKEN_UNIT = 1_000_000
 COMPAT_IMAGE_SIZES = ("1024x1024", "1536x1024", "1024x1536")
+# These models returned empty SSE streams on the reference-image route in live tests.
+NON_STREAMING_IMAGE_EDITS = frozenset({
+    "gpt-image-2.5", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst",
+})
 IMAGE_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}
 _SECRET_PATHS = {}
 _MEMORY_KEY = Fernet.generate_key()
@@ -86,6 +90,8 @@ def setup(db, secret_path=None):
             db.execute(f"ALTER TABLE cpa_models ADD COLUMN {name} INTEGER")
     if "agent_mode" not in columns:
         db.execute("ALTER TABLE cpa_models ADD COLUMN agent_mode TEXT NOT NULL DEFAULT 'native'")
+    if "context_window" not in columns:
+        db.execute("ALTER TABLE cpa_models ADD COLUMN context_window INTEGER")
     # Legacy flat prices do not specify an input or output rate.
     db.execute("UPDATE cpa_models SET enabled=0 WHERE kind='chat' AND enabled=1 AND input_rate IS NULL")
     db.execute("DELETE FROM cpa_defaults WHERE kind='chat' AND model_id IN (SELECT id FROM cpa_models WHERE enabled=0)")
@@ -206,11 +212,14 @@ def _outbound(url):
 
 
 @contextmanager
-def _response(url, *, key=None, data=None, content_type=None, timeout=180, extra_headers=None):
+def _response(url, *, key=None, data=None, content_type=None, timeout=180, extra_headers=None, public_only=False):
     scheme, host, port, origin, target, addresses = _outbound(url)
+    if public_only and any(not ipaddress.ip_address(address).is_global for address in addresses):
+        raise ProviderError(400, "联网资料必须来自公开互联网地址。")
     submission = data is not None
     connection = http.client.HTTPConnection(host, port, timeout=timeout)
     stream = None
+    request_id = None
     try:
         for address in addresses:
             try:
@@ -233,10 +242,11 @@ def _response(url, *, key=None, data=None, content_type=None, timeout=180, extra
             headers.update(extra_headers)
         connection.request("POST" if submission else "GET", target, data, headers)
         response = connection.getresponse()
+        request_id = _safe_id(response.getheader("x-request-id"))
         yield response
     except (OSError, http.client.HTTPException):
         message = "模型请求已中断，结果待核对。" if submission else "读取模型服务响应失败。"
-        raise ProviderError(502, message, uncertain=submission) from None
+        raise ProviderError(502, message, uncertain=submission, request_id=request_id) from None
     finally:
         connection.close()
         if stream is not None:
@@ -250,10 +260,12 @@ def _safe_id(value):
 def _read(response, limit, submission=False):
     length = response.getheader("Content-Length")
     if length and length.isdecimal() and int(length) > limit:
-        raise ProviderError(502, "模型服务响应超过大小限制。", uncertain=submission)
+        raise ProviderError(502, "模型服务响应超过大小限制。", uncertain=submission,
+                            request_id=_safe_id(response.getheader("x-request-id")))
     data = response.read(limit + 1)
     if len(data) > limit:
-        raise ProviderError(502, "模型服务响应超过大小限制。", uncertain=submission)
+        raise ProviderError(502, "模型服务响应超过大小限制。", uncertain=submission,
+                            request_id=_safe_id(response.getheader("x-request-id")))
     return data
 
 
@@ -355,6 +367,9 @@ def discover(base_url, key):
         if isinstance(model_id, str) and MODEL_ID.fullmatch(model_id):
             label = row.get("name") or row.get("display_name")
             models[model_id] = {"id": model_id, "name": label[:100] if isinstance(label, str) else model_id}
+            window = row.get('context_window') or row.get('context_length') or row.get('max_model_len')
+            if type(window) is int and 16384 <= window <= 10_000_000:
+                models[model_id]['contextWindowTokens'] = window
     if not models:
         raise ProviderError(404, "服务返回的模型目录为空，可以核对权限或手工添加模型 ID。")
     return {"models": sorted(models.values(), key=lambda model: model["id"].lower())}
@@ -576,12 +591,20 @@ def _stream_image(config, endpoint, payload, images, mask, receipt, on_preview):
             except (ValueError, UnicodeError):
                 raise ProviderError(502, "模型未返回可识别的生图结果。", True, request_id) from None
             return _image_result(value if isinstance(value, dict) else {}, config, receipt)
-        prefix = "image_edit." if images else "image_generation."
+        named_event = None
+        saw_event = False
+        saw_preview = False
         total = 0
         while line := response.readline(MAX_RESPONSE + 1):
             total += len(line)
             if len(line) > MAX_RESPONSE or total > MAX_RESPONSE * 4:
                 raise ProviderError(502, "流式图片超过大小限制。", True, request_id)
+            if not line.strip():
+                named_event = None
+                continue
+            if line.startswith(b"event:"):
+                named_event = line[6:].strip().decode("ascii", errors="replace")
+                continue
             if not line.startswith(b"data:"):
                 continue
             chunk = line[5:].strip()
@@ -591,18 +614,28 @@ def _stream_image(config, endpoint, payload, images, mask, receipt, on_preview):
                 event = json.loads(chunk)
             except (ValueError, UnicodeError):
                 raise ProviderError(502, "模型返回了无效的流式图片。", True, request_id) from None
-            if not isinstance(event, dict) or event.get("error"):
-                raise ProviderError(502, "流式生图响应中断，结果待核对。", True, request_id)
-            kind = event.get("type")
-            if kind == prefix + "completed":
+            saw_event = True
+            if not isinstance(event, dict) or event.get("error") or named_event == "error":
+                raise ProviderError(502, "模型服务在流式响应中报告了错误，未保存成品。", True, request_id)
+            kind = event.get("type") or named_event
+            if kind in ("image_generation.completed", "image_edit.completed"):
+                if isinstance(event.get("data"), list):
+                    return _image_result(event, config, receipt)
                 return _image_result({"data": [event]}, config, receipt)
-            if kind == prefix + "partial_image":
+            if kind in ("image_generation.partial_image", "image_edit.partial_image"):
                 try:
                     preview = _image_result({"data": [{"b64_json": event.get("b64_json")}]}, config, receipt)
                 except ProviderError:
                     continue
+                saw_preview = True
                 on_preview(preview)
-        raise ProviderError(502, "流式生图未交付成品，结果待核对。", True, request_id)
+        if saw_preview:
+            reason = "上游仅发送了预览图，未发送最终成品。"
+        elif saw_event:
+            reason = "上游结束了流式响应，未发送可识别的最终成品。"
+        else:
+            reason = "上游建立了流式连接，但没有返回任何图片事件，未保存成品。"
+        raise ProviderError(502, reason, True, request_id)
 
 
 def generate(config, prompt, size, images=None, mask=None, *, receipt=None, on_preview=None, output=None):
@@ -625,7 +658,9 @@ def generate(config, prompt, size, images=None, mask=None, *, receipt=None, on_p
     received = receipt if receipt is not None else {}
     received["endpoint"] = endpoint
     candidate, alternatives, attempted = size, [], set()
-    streaming = not output_format and on_preview is not None and "imageStream" in config.get("capabilities", [])
+    edit_stream_supported = not images or config["model"] not in NON_STREAMING_IMAGE_EDITS
+    streaming = (edit_stream_supported and not output_format and on_preview is not None
+                 and "imageStream" in config.get("capabilities", []))
     while True:
         attempted.add(candidate)
         payload = {**fields, "size": candidate} if candidate is not None else fields
@@ -691,7 +726,7 @@ def _chat_events(config, payload, receipt, *, allow_json=False):
                 try:
                     event = json.loads(_read(response, MAX_CHAT, True))
                 except (ValueError, UnicodeError):
-                    raise ProviderError(502, "模型未返回有效的工具计划。", True, request_id) from None
+                    raise ProviderError(502, "模型返回的回复格式无效。", True, request_id) from None
                 if isinstance(event, dict) and not event.get("error"):
                     if receipt is not None:
                         receipt["usage"] = event.get("usage")
@@ -737,8 +772,8 @@ def _chat_events(config, payload, receipt, *, allow_json=False):
 
 def _chat_stream(config, payload, receipt):
     emitted = False
-    for event in _chat_events(config, payload, receipt):
-        chunk = _chat_text(event, "delta")
+    for event in _chat_events(config, payload, receipt, allow_json=True):
+        chunk = _chat_text(event, "delta") or _chat_text(event, "message")
         if chunk:
             emitted |= bool(chunk.strip())
             yield chunk
@@ -888,6 +923,8 @@ def _model_view(row):
             "enabled": bool(row["enabled"]), "price": row["price"], "tests": tests,
             "tokenRates": {"input": row["input_rate"], "output": row["output_rate"]} if row["input_rate"] is not None else None,
             "agentMode": row["agent_mode"],
+            "contextWindowTokens": row["context_window"] or 65536,
+            "contextWindowSource": "configured" if row["context_window"] else "default",
             "verified": [name for name, result in tests.items() if result.get("ok")]}
 
 
@@ -908,7 +945,8 @@ def catalog(db):
     for row in _active_models(db):
         entry = _model_view(row)
         models.append({**{key: entry[key] for key in ("id", "name", "kind", "price", "sizes", "maxReferences")},
-                       "capabilities": entry["capabilities"], "tokenRates": entry["tokenRates"]})
+                       "capabilities": entry["capabilities"], "tokenRates": entry["tokenRates"],
+                       "contextWindowTokens": entry["contextWindowTokens"], "contextWindowSource": entry["contextWindowSource"]})
     return {"models": models, "defaults": _defaults(db)}
 
 
@@ -1009,6 +1047,9 @@ def _save_model(db, payload, actor, row=None):
     if agent_mode not in ("native", "json"):
         raise ProviderError(400, "请选择有效的 Agent 调用方式。")
     same = row and (connection_id, model_id, kind) == (row["connection_id"], row["model_id"], row["kind"])
+    window = payload.get('contextWindowTokens', row['context_window'] if same else None) if kind == 'chat' else None
+    if window is not None and (type(window) is not int or not 16384 <= window <= 10_000_000):
+        raise ProviderError(400, '上下文窗口须为 16384 至 10000000 的整数 Token 数；留空使用保守默认值。')
     tests = {cap: value for cap, value in old.get("tests", {}).items() if cap in capabilities} if same else {}
     if maximum > old.get("maxReferences", maximum):
         tests.pop("multiReference", None)
@@ -1018,15 +1059,15 @@ def _save_model(db, payload, actor, row=None):
         raise ProviderError(409, "这条连接已添加同名模型 ID。")
     fields = (connection_id, model_id, name, kind, json.dumps(list(dict.fromkeys(capabilities))),
               json.dumps(sizes), maximum, price, enabled, json.dumps(tests, ensure_ascii=False), int(time.time()),
-              rates["input"] if rates else None, rates["output"] if rates else None, agent_mode)
+              rates["input"] if rates else None, rates["output"] if rates else None, agent_mode, window)
     if row:
         db.execute("""UPDATE cpa_models SET connection_id=?,model_id=?,name=?,kind=?,capabilities=?,sizes=?,max_references=?,
-                      price=?,enabled=?,tests=?,updated=?,input_rate=?,output_rate=?,agent_mode=? WHERE id=?""", (*fields, identifier))
+                      price=?,enabled=?,tests=?,updated=?,input_rate=?,output_rate=?,agent_mode=?,context_window=? WHERE id=?""", (*fields, identifier))
         if not enabled or old["kind"] != kind:
             db.execute("DELETE FROM cpa_defaults WHERE model_id=?", (identifier,))
     else:
         db.execute("""INSERT INTO cpa_models(connection_id,model_id,name,kind,capabilities,sizes,max_references,
-                      price,enabled,tests,updated,input_rate,output_rate,agent_mode,id,created) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                      price,enabled,tests,updated,input_rate,output_rate,agent_mode,context_window,id,created) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                    (*fields, identifier, int(time.time())))
     _audit(db, actor, "model.update" if row else "model.create", identifier, {"enabled": enabled, "agentMode": agent_mode})
     return {"model": _model_view(_lookup(db, "cpa_models", identifier, "模型"))}
@@ -1184,6 +1225,7 @@ def _batch_models(db, payload, actor):
         if model_id in existing:
             continue
         _save_model(db, {**shared, "kind": kind, "connectionId": connection_id, "enabled": enabled,
+                         "contextWindowTokens": item.get('contextWindowTokens'),
                          "modelId": model_id, "name": item.get("name") or model_id}, actor)
         imported += 1
     return {"updated": imported, "skipped": len(unique) - imported}
