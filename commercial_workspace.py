@@ -489,6 +489,19 @@ def submit_jobs(db, owner, body, *, upscale_method=None):
                 context["posterShot"] = poster_shot
             if scope == "poster" and raw_context.get("posterPromptOnly") is True:
                 context["posterPromptOnly"] = True
+            if scope == "poster" and "posterCopy" in raw_context:
+                copy = raw_context["posterCopy"]
+                if not isinstance(copy, dict):
+                    raise CommercialError(400, "海报文案格式无效。")
+                saved_copy = {key: text(copy.get(key, ""), "海报文案", 300, 0) for key in ("title", "subtitle", "date")}
+                for key in ("logoId", "qrId"):
+                    identifier = copy.get(key, "")
+                    if not isinstance(identifier, str) or (identifier and not db.execute(
+                            "SELECT 1 FROM assets WHERE id=? AND user_id=? AND mime LIKE 'image/%'",
+                            (identifier, owner)).fetchone()):
+                        raise CommercialError(400, "海报标识素材不存在或无权使用。")
+                    saved_copy[key] = identifier
+                context["posterCopy"] = saved_copy
             if scope == "ppt":
                 index, phase = raw_context.get("index"), raw_context.get("phase")
                 if type(index) is not int or not 0 <= index < 12 or phase not in ("board", "final", "redo"):

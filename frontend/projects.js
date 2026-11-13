@@ -365,7 +365,11 @@ const workspaceProjects = (() => {
 
   function draw() {
     if (ui.route === "projects") paint("#named-projects", projectList);
-    if (ui.route === "poster") paint("#poster-project-controls", posterHistory);
+    if (ui.route === "poster") {
+      paint("#poster-project-controls", posterHistory);
+      const chats = content.querySelector(".poster-conversation-controls");
+      if (chats) chats.inert = syncOwner().posterSwitching;
+    }
     if (ui.route === "scenes") {
       mediaItems.clear();
       paint("#published-templates", templateGallery);
@@ -399,7 +403,7 @@ const workspaceProjects = (() => {
     return `<strong>${esc(name)}</strong>
       ${older.length ? `<select class="input" aria-label="历史海报项目" data-field="poster-history" ${current.posterSwitching ? "disabled" : ""}>
         <option value="">历史项目（${older.length}）</option>${options(older.map(project => [project.id, project.name]), "")}</select>` : ""}
-      ${button("新建创作", "new-poster-project", "", "secondary", current.posterSwitching ? "disabled" : "")}`;
+      ${button("新建项目", "new-poster-project", "", "secondary", current.posterSwitching ? "disabled" : "")}`;
   }
 
   async function switchPoster(target = "") {

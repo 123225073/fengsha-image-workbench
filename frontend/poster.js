@@ -72,6 +72,40 @@ function posterVisual(format) {
   return ui.files.find(file => file.id === identifier);
 }
 
+function posterResultJob(assetId) {
+  return (live.allJobs || []).find(job => job.scope === "poster" && job.assetId === assetId &&
+    job.context?.documentId === state.poster.documentId);
+}
+
+function posterResults(formats = posterFormats) {
+  const results = [], seen = new Set(), versions = new Map();
+  const append = (format, asset, job) => {
+    if (asset && seen.has(asset.id)) return;
+    if (asset) seen.add(asset.id);
+    const version = (versions.get(format.id) || 0) + 1;
+    versions.set(format.id, version);
+    results.push({format, asset, job, version, key: `${format.id}:${asset?.id || job.id}`});
+  };
+  for (const job of [...(live.allJobs || [])].reverse()) {
+    if (!state.poster.documentId || job.scope !== "poster" || job.context?.documentId !== state.poster.documentId) continue;
+    const format = formats.find(item => item.id === (job.context.formatId || "main"));
+    if (!format) continue;
+    const asset = ui.files.find(file => file.id === job.assetId);
+    if (!asset && (job.status === "succeeded" || job.hidden)) continue;
+    append(format, asset, job);
+  }
+  for (const format of formats) {
+    const asset = posterVisual(format);
+    if (asset && !seen.has(asset.id)) append(format, asset, null);
+  }
+  return results.reverse();
+}
+
+function posterResult(value) {
+  return posterResults().find(item => item.key === value) ||
+    posterResults().find(item => item.format.id === value && item.asset);
+}
+
 function posterReferences() {
   return [...new Set(posterReferenceTargets.map(target => ui.file[target]?.id).filter(Boolean))];
 }
@@ -87,9 +121,16 @@ function posterPreviewSource() {
 
 function posterRenderOptions(format, visual) {
   const poster = state.poster;
+  const job = posterResultJob(visual.id);
   const options = {width: format.width, height: format.height, photo: uploadDescriptor(visual), fitted: true};
-  if (visual.posterPromptOnly || assetGenerationJob(visual.id)?.context?.posterPromptOnly) {
+  if (visual.posterPromptOnly || job?.context?.posterPromptOnly) {
     return {...options, promptOnly: true};
+  }
+  const copy = job?.context?.posterCopy;
+  if (copy) {
+    const logo = ui.files.find(file => file.id === copy.logoId), qr = ui.files.find(file => file.id === copy.qrId);
+    return {...options, layout: format.layout, title: copy.title, subtitle: copy.subtitle, date: copy.date,
+      logo: logo && uploadDescriptor(logo).url, qr: qr && uploadDescriptor(qr).url};
   }
   const cleanProduct = posterPresetFor(poster, format) === "studio";
   return {...options, layout: poster.visuals?.[format.id] ? format.layout : "bottom",
@@ -115,37 +156,38 @@ function posterOutput(format, visual = posterVisual(format)) {
   const options = posterRenderOptions(format, visual);
   const title = options.promptOnly ? "海报" : state.poster.title || "海报";
   return {name: `${title} · ${format.name}`,
-    filename: `${options.promptOnly ? "海报" : posterFilename()}-${format.name}-${format.width}x${format.height}.png`,
+    filename: `${options.promptOnly ? "海报" : posterFilename()}-${format.name}-${format.width}x${format.height}-${visual.id}.png`,
     render: () => workspaceRaster.poster(options)};
 }
 
-function posterArtwork(format) {
-  const visual = posterVisual(format);
+function posterArtwork(format, visual = posterVisual(format)) {
   if (!visual) return "";
   const descriptor = posterOutput(format, visual);
   const options = posterRenderOptions(format, visual);
   const scale = Math.min(1, 600 / Math.max(format.width, format.height));
   options.width = Math.round(format.width * scale);
   options.height = Math.round(format.height * scale);
-  const key = "poster:" + format.id;
+  const key = `poster:${format.id}:${visual.id}`;
   const html = rasterImage(key, JSON.stringify(options), descriptor.name, () => workspaceRaster.poster(options), true);
   mediaItems.set(key, descriptor);
   return html;
 }
 
 function posterGallery(formats) {
-  return formats.map(format => {
-    const asset = posterVisual(format);
-    const job = posterFormatJob(format.id, asset?.id);
-    return `<article class="poster-result" id="poster-result-${format.id}" data-poster-result="${format.id}">
-    <div class="poster-result-image output-job-frame">
-      ${asset ? `<span class="meta poster-preview-pending" role="status">正在准备预览…</span><div data-poster-art="${format.id}">${posterArtwork(format)}</div>` : ""}
-      <div class="output-job-slot${asset ? "" : " is-placeholder"}" data-poster-job="${format.id}" data-asset="${esc(asset?.id || "")}">${outputJobStatus(job, asset?.id)}</div>
+  return posterResults(formats).map(({format, asset, job, key, version}) => {
+    return `<article class="poster-result" data-poster-result="${format.id}" data-result-key="${esc(key)}">
+    <div class="poster-result-image">
+      ${asset ? `<span class="meta poster-preview-pending" role="status">正在准备预览…</span><div data-poster-art="${format.id}" data-asset="${esc(asset.id)}">${posterArtwork(format, asset)}</div>` :
+        '<div class="poster-result-placeholder" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="4" y="4" width="24" height="24" rx="3"/><circle cx="12" cy="12" r="3"/><path d="m5 25 9-8 5 4 4-4 5 5"/></svg></div>'}
     </div>
-    <div class="poster-result-info"><strong>${format.name}</strong><span class="meta">${format.width} × ${format.height} px</span></div>
-    <div class="row">${asset ? button("下载", "poster-download", format.id, "secondary", `aria-label="下载${format.name}"`) +
-      button("编辑", "poster-edit", format.id, "ghost", `aria-label="编辑${format.name}"`) : ""}
-      <span data-poster-job-error="${format.id}" data-asset="${esc(asset?.id || "")}">${jobErrorLink(job)}</span></div>
+    <div class="poster-result-info">
+      <div class="poster-result-heading"><strong>${format.name}</strong><span class="poster-result-version">第 ${version} 次</span></div>
+      <span class="meta">${format.width} × ${format.height} px</span>
+      <div class="poster-result-status" data-poster-job="${format.id}" data-job-id="${esc(job?.id || "")}" data-asset="${esc(asset?.id || "")}">${outputJobStatus(job, asset?.id)}</div>
+    </div>
+    <div class="row poster-result-actions">${asset ? button("下载", "poster-download", key, "secondary", `aria-label="下载${format.name}第${version}次"`) +
+      button("编辑", "poster-edit", key, "ghost", `aria-label="编辑${format.name}第${version}次"`) : ""}
+      <span data-poster-job-error="${format.id}" data-job-id="${esc(job?.id || "")}" data-asset="${esc(asset?.id || "")}">${jobErrorLink(job)}</span></div>
   </article>`;
   }).join("");
 }
@@ -176,16 +218,24 @@ function posterUpload(target, label, hint = "上传、拖入或粘贴") {
     }).join("")}</div>` : `<p class="meta">${hint}</p>`}</div>`;
 }
 
+function posterChatControls(poster) {
+  const history = poster.advisorHistory || [];
+  const busy = pending.has("poster-advisor");
+  return `<div class="poster-conversation-controls" role="group" aria-label="本项目对话">
+    <div class="poster-conversation-heading"><h2>项目对话</h2>
+      ${button("＋ 新对话", "poster-new-chat", "", "secondary", busy ? "disabled" : "")}</div>
+    <select class="input" aria-label="切换项目内对话" data-field="poster-chat-history" ${busy ? "disabled" : ""}>
+      <option value="">${esc(poster.discussion?.[0]?.question.slice(0, 35) || "新对话")}</option>
+      ${history.map((item, index) => `<option value="${index}">${esc(item.discussion?.[0]?.question.slice(0, 35) || item.message?.slice(0, 35) || "海报草稿")}</option>`).join("")}
+    </select></div>`;
+}
+
 function posterAdvisorView(poster) {
   const turns = Array.isArray(poster.discussion) ? poster.discussion : [];
   const brief = poster.proposal;
   const busy = pending.has("poster-advisor");
-  const history = poster.advisorHistory || [];
   return `<div class="stack">
-    <div class="row-between poster-chat-header"><h2>海报对话</h2>
-      ${button("＋ 新对话", "poster-new-chat", "", "secondary", busy ? "disabled" : "")}</div>
-    ${history.length ? `<label class="field">切换历史对话<select class="input" data-field="poster-chat-history" ${busy ? "disabled" : ""}>
-      <option value="">当前对话</option>${history.map((item, index) => `<option value="${index}">${esc(item.discussion?.[0]?.question.slice(0, 35) || "海报草稿")}</option>`).join("")}</select></label>` : ""}
+    <h2>海报对话</h2>
     ${modelSelect("poster-language-model", "chat", "text", poster.languageModel, "语言模型")}
     ${researchModeField("poster-search-mode", poster.searchMode, busy ? "disabled" : "")}
     <div class="poster-discussion" role="log" aria-label="海报需求沟通">
@@ -209,7 +259,7 @@ function posterAdvisorView(poster) {
 }
 
 function switchPosterChat(index = null) {
-  if (pending.has("poster-advisor")) return;
+  if (pending.has("poster-advisor") || workspaceProjects.posterSwitching()) return;
   const poster = state.poster;
   const history = [...(poster.advisorHistory || [])];
   const next = index === null ? null : history.splice(index, 1)[0];
@@ -219,7 +269,8 @@ function switchPosterChat(index = null) {
       sessionId: poster.advisorSessionId ||= crypto.randomUUID(),
       proposal: poster.proposal || null});
   }
-  poster.advisorHistory = history.slice(0, 8);
+  poster.advisorHistory = history;
+  poster.mode = "advisor";
   poster.discussion = next?.discussion || [];
   poster.advisorSessionId = next?.sessionId || crypto.randomUUID();
   poster.message = next?.message || "";
@@ -240,8 +291,9 @@ function posterView() {
   const chosen = selectedPosterFormats();
   const format = posterFormats.find(item => item.id === poster.selected) || chosen[0] || posterFormats[0];
   const source = posterPreviewSource();
-  const completed = posterFormats.filter(posterVisual);
-  const galleryFormats = posterFormats.filter(format => posterVisual(format) || posterFormatJob(format.id));
+  const results = posterResults();
+  const completed = results.filter(item => item.asset);
+  const galleryFormats = posterFormats.filter(format => results.some(item => item.format.id === format.id));
   const showResults = poster.previewTab === "results" || (poster.previewTab !== "reference" && completed.length > 0);
   const count = new Set(posterReferenceTargets.map(target => ui.file[target]?.id || ui.file[target]?.url).filter(Boolean)).size;
   const advisor = poster.mode === "advisor";
@@ -284,6 +336,7 @@ function posterView() {
       </div>
     </section>
     <aside class="card stack poster-controls">
+      ${posterChatControls(poster)}
       <div class="stack poster-control-fields" data-poster-scroll="controls">
       <div class="row poster-modes">${button("按参数制作", "poster-mode", "manual", advisor ? "ghost" : "primary", `aria-pressed="${!advisor}"`)}
         ${button("和 AI 沟通", "poster-mode", "advisor", advisor ? "primary" : "ghost", `aria-pressed="${advisor}"`)}</div>
@@ -318,7 +371,7 @@ function posterView() {
 function updatePosterPreview() {
   for (const preview of content.querySelectorAll("[data-poster-art]")) {
     const format = posterFormats.find(item => item.id === preview.dataset.posterArt);
-    if (format) preview.innerHTML = posterArtwork(format);
+    if (format) preview.innerHTML = posterArtwork(format, ui.files.find(file => file.id === preview.dataset.asset));
   }
 }
 
@@ -347,7 +400,10 @@ function createPosterVisual(id) {
       prompt: posterFullImagePrompt(format, imageIds, description || "突出参考图中的商品")};
     const shot = posterPresetFor(poster, format);
     return {...input,
-      context: {formatId: format.id, posterShot: shot},
+      context: {formatId: format.id, posterShot: shot, posterCopy: {
+        title: shot === "studio" ? "" : poster.title || "", subtitle: shot === "studio" ? "" : poster.subtitle || "",
+        date: shot === "studio" ? "" : poster.date || "", logoId: shot === "studio" ? "" : ui.file.logo?.id || "",
+        qrId: shot === "studio" ? "" : ui.file.qr?.id || ""}},
       prompt: posterImagePrompt(format, poster, imageIds, description, shot)};
   });
   const skipped = selected.length - formats.length;
@@ -358,14 +414,13 @@ function createPosterVisual(id) {
 async function outputPosters(store) {
   if (store && !requireAccount()) return;
   if (ui.uploading) return notify("正在处理素材，请稍等。");
-  const formats = (store ? selectedPosterFormats() : posterFormats).filter(posterVisual);
-  if (!formats.length) return notify(store ? "请选择已生成的海报尺寸。" : "还没有可下载的成品。");
+  const results = posterResults(store ? selectedPosterFormats() : posterFormats).filter(item => item.asset);
+  if (!results.length) return notify(store ? "请选择已生成的海报尺寸。" : "还没有可下载的成品。");
   const poster = state.poster;
   const owner = identity;
   const title = posterFilename();
-  const outputs = formats.map(format => {
-    const visual = posterVisual(format);
-    return {parent: visual.id, descriptor: posterOutput(format, visual)};
+  const outputs = results.map(({format, asset}) => {
+    return {parent: asset.id, descriptor: posterOutput(format, asset)};
   });
   ui.uploading = true;
   let done = 0;

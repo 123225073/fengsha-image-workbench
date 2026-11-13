@@ -305,7 +305,7 @@ def image_signature(data, mime):
 
 
 class WorkspaceHandler(BaseHTTPRequestHandler):
-    server_version = "FengshaWorkspace/1.2.1"
+    server_version = "FengshaWorkspace/1.2.3"
 
     def do_GET(self):
         self.dispatch("GET")

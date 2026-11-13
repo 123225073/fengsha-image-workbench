@@ -364,12 +364,12 @@ async function applyJobs(result, owner) {
     for (const slot of content.querySelectorAll("[data-ppt-job], [data-poster-job]")) {
       const job = slot.hasAttribute("data-ppt-job")
         ? pptSlideJob(Number(slot.dataset.pptJob), slot.dataset.asset)
-        : posterFormatJob(slot.dataset.posterJob, slot.dataset.asset);
+        : records.get(slot.dataset.jobId) || posterFormatJob(slot.dataset.posterJob, slot.dataset.asset);
       slot.innerHTML = slot.hasAttribute("data-ppt-job") ? pptImageJobStatus(job, slot.dataset.asset) : outputJobStatus(job, slot.dataset.asset);
     }
     for (const slot of content.querySelectorAll("[data-poster-job-error], [data-poster-stage-status]")) {
       if (slot.hasAttribute("data-poster-job-error")) {
-        slot.innerHTML = jobErrorLink(posterFormatJob(slot.dataset.posterJobError, slot.dataset.asset));
+        slot.innerHTML = jobErrorLink(records.get(slot.dataset.jobId) || posterFormatJob(slot.dataset.posterJobError, slot.dataset.asset));
       } else {
         const markup = posterStageJobStatus(posterFormatJob(slot.dataset.posterStageStatus, slot.dataset.asset));
         slot.innerHTML = markup;
@@ -440,6 +440,7 @@ function pptSlideJob(index, assetId) {
 }
 
 function posterFormatJob(format, assetId) {
+  if (assetId) return posterResultJob(assetId);
   const current = state.poster.documentId && live.jobs.find(job => job.scope === "poster" &&
     job.context?.documentId === state.poster.documentId && (job.context?.formatId || "main") === format);
   return current || assetGenerationJob(assetId);

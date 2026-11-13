@@ -2412,12 +2412,13 @@ const actions = {
   "save-poster": () => outputPosters(true),
   "export-poster": () => outputPosters(false),
   "poster-download": value => {
-    const format = posterFormats.find(item => item.id === value);
-    const descriptor = format && posterOutput(format);
+    const result = posterResult(value);
+    const descriptor = result?.asset && posterOutput(result.format, result.asset);
     if (descriptor) return workspaceMedia.download(descriptor);
   },
   "poster-edit": value => {
-    const descriptor = mediaItems.get("poster:" + value);
+    const result = posterResult(value);
+    const descriptor = result?.asset && posterOutput(result.format, result.asset);
     if (descriptor) return sendToEditor(descriptor);
   },
   "use-poster-product": value => {

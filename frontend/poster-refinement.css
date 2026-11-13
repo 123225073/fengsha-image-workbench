@@ -1,15 +1,23 @@
+.section[data-od-id="poster-editor"] > .section-head { margin-bottom: 14px; }
+.section[data-od-id="poster-editor"] > .section-head h1 { font-size: 28px; letter-spacing: -.02em; }
 .poster-project-controls {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 .poster-project-controls strong {
   flex: 1 1 160px;
   overflow-wrap: anywhere;
 }
 .poster-project-controls select { width: auto; max-width: min(100%, 260px); }
+.poster-project-controls .btn, .poster-project-controls .input { min-height: 36px; font-size: 13px; }
+.poster-conversation-controls { display: grid; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid var(--border); min-width: 0; }
+.poster-conversation-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.poster-conversation-heading h2 { font-size: 16px; }
+.poster-conversation-heading .btn { min-height: 32px; padding: 5px 10px; font-size: 12px; white-space: nowrap; }
+.poster-conversation-controls .input { width: 100%; min-width: 0; font-size: 13px; text-overflow: ellipsis; }
 .poster-task-history summary { color: var(--muted); cursor: pointer; padding: 6px 0; }
 .poster-task-history[open] .workbench-job-note { margin-top: 6px; }
 
@@ -24,12 +32,24 @@
 .poster-stage-toolbar .btn-primary { white-space: nowrap; }
 .poster-gallery {
   min-height: 0;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 184px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr));
   overflow: auto;
   scrollbar-width: thin;
 }
 .poster-sizes .poster-size-row[data-poster-selected="true"] { border-inline-start: 2px solid var(--accent); }
 .poster-result-image { position: relative; }
+.poster-result { padding: 10px; gap: 12px; }
+.poster-result-info { display: grid; justify-content: stretch; gap: 5px; }
+.poster-result-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.poster-result-version { flex-shrink: 0; font-size: 11px; color: var(--muted); }
+.poster-result-info > .meta { font-size: 12px; }
+.poster-result-status { min-height: 20px; font-size: 12px; }
+.poster-result-status .job-progress { display: flex; justify-content: space-between; gap: 4px 10px; }
+.poster-result-status strong { font-size: 12px; font-weight: 500; color: var(--muted); }
+.poster-result-actions { padding-top: 9px; border-top: 1px solid var(--border); }
+.poster-result-actions .btn { min-height: 32px; font-size: 12px; padding: 5px 12px; }
+.poster-result-placeholder { display: grid; place-items: center; height: 100%; color: var(--muted); opacity: .5; }
+.poster-result-placeholder svg { width: 36px; height: 36px; }
 .poster-result-image > [data-poster-art] { height: 100%; }
 .poster-preview-pending { position: absolute; inset: 0; display: grid; place-items: center; padding: 12px; }
 .poster-result-image:has(img[src]) .poster-preview-pending { display: none; }
@@ -50,7 +70,7 @@
   }
   .poster-stage { height: var(--poster-work-height); grid-template-rows: auto minmax(0, 1fr) auto; }
   .poster-stage-art { min-height: 0; }
-  .poster-controls { display: grid; height: var(--poster-work-height); grid-template-rows: minmax(0, 1fr) auto; gap: 12px; }
+  .poster-controls { display: grid; height: var(--poster-work-height); grid-template-rows: auto minmax(0, 1fr) auto; gap: 12px; }
   .poster-control-fields { overflow: auto; min-height: 0; scrollbar-width: thin; padding: 2px 4px; }
   .poster-output [data-job-summary], .poster-stage-progress { max-height: 7rem; overflow: auto; scrollbar-width: thin; }
   .poster-result-image { max-height: 50dvh; }

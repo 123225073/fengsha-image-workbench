@@ -44,6 +44,7 @@ assert.ok(!html.includes('javascript:'));
 console.log('PASS: 80-round frontend history and visible source states');
 
 const posterSandbox = {crypto: require('node:crypto').webcrypto, pending: new Map(),
+  workspaceProjects: {posterSwitching: () => false},
   state: {poster: {advisorSessionId: 'original-session', discussion: [{question:'已确认内容',reply:'已记录'}]}},
   save() {}, render() {}, content: {querySelector: () => ({focus() {}})}};
 vm.createContext(posterSandbox);
