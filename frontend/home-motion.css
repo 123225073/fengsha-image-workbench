@@ -1,0 +1,126 @@
+body[data-route="home"] .workspace {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  background:
+    linear-gradient(180deg, #0c151521 8%, #10191a5c 50%, #10191a91 100%),
+    url("/frontend/fengsha-hero.webp") center 57% / cover no-repeat #102021;
+}
+
+body[data-route="home"] #content {
+  flex: 1;
+  width: 100%;
+  max-width: 1376px;
+}
+
+body[data-route="home"] .pagefoot {
+  border-color: #9eb9ac2b;
+  background: #101b1b75;
+}
+
+.workspace [data-od-id="home-hero"] {
+  padding-block: clamp(36px, 6.2vh, 66px) clamp(30px, 5.4vh, 58px);
+}
+
+.creation-content {
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+  width: min(100%, 820px);
+  margin-inline: auto;
+}
+
+.creation-content h1 {
+  margin: 0;
+  color: #f3f4ec;
+  font-size: clamp(31px, 3vw, 44px);
+  line-height: 1.2;
+  font-weight: 680;
+  letter-spacing: .02em;
+}
+
+.creation-modes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid #3b463d;
+  border-radius: 11px;
+  background: #191e1b;
+}
+
+.creation-modes .btn {
+  min-height: 34px;
+  padding: 5px clamp(9px, 2.2vw, 20px);
+  border-radius: 7px;
+  color: #c5cdc3;
+  white-space: nowrap;
+}
+
+.creation-modes .btn[aria-pressed="true"] {
+  color: #e6f4d6;
+  background: #354337;
+}
+
+.creation-composer {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px 8px;
+  border: 1px solid #414c43;
+  border-radius: 17px;
+  background: #222824f5;
+  box-shadow: 0 14px 34px #0a0e0b55;
+}
+
+.creation-composer:focus-within,
+.creation-composer.is-drop-target {
+  border-color: #8da981;
+}
+
+.creation-composer .textarea {
+  display: block;
+  width: 100%;
+  min-height: clamp(96px, 12vh, 128px);
+  padding: 15px 14px 9px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  font-size: 16px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.creation-composer .textarea::placeholder { color: #b6c0b5; }
+.creation-composer .textarea:focus-visible { outline: none; }
+
+.creation-actions {
+  gap: 8px;
+  padding: 7px 3px 2px;
+}
+
+.creation-actions .row { gap: 4px; }
+.creation-actions .btn-primary { min-height: 39px; padding-inline: 16px; border-radius: 9px; }
+.creation-actions .btn-ghost { min-height: 36px; padding-inline: 10px; color: #cbd5c9; }
+
+.home-reference {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 6px;
+}
+.home-reference .upload-thumb { width: 54px; height: 44px; object-fit: cover; }
+.home-reference > span { min-width: 0; color: #d5e0d3; overflow-wrap: anywhere; }
+
+body[data-route="home"] :is([data-od-id="home-tools"], [data-od-id="home-scenes"]) {
+  padding-block: 16px 22px;
+}
+
+@media (max-width: 460px) {
+  .workspace [data-od-id="home-hero"] { padding-block: 28px 24px; }
+  body[data-route="home"] .workspace { background-position: center, 24% center; }
+  .creation-content { gap: 14px; }
+  .creation-modes { max-width: 100%; }
+  .creation-modes .btn { padding-inline: 9px; }
+  .creation-actions .btn-primary { width: 100%; }
+}

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>风沙生图工作台</title>
+<link rel="stylesheet" href="/frontend/app.css">
+<link rel="stylesheet" href="/frontend/media.css">
+<link rel="stylesheet" href="/frontend/commercial.css">
+<link rel="stylesheet" href="/frontend/auth.css">
+<link rel="stylesheet" href="/frontend/home-motion.css">
+<link rel="stylesheet" href="/frontend/image-regions.css">
+<link rel="stylesheet" href="/frontend/editor-refinement.css">
+<link rel="stylesheet" href="/frontend/poster-refinement.css">
+<link rel="stylesheet" href="/frontend/animation.css">
+<link rel="stylesheet" href="/frontend/ppt-templates.css">
+<link rel="stylesheet" href="/frontend/workbench-progress.css">
+<link rel="icon" href="/frontend/brand.png" type="image/png">
+</head>
+<body class="booting">
+<aside id="sidebar" class="sidebar" aria-label="工作台导航">
+  <a class="logo" href="/#home"><img class="logo-mark" src="/frontend/brand.png" alt="" width="35" height="35"><span class="logo-name">风沙生图工作台</span></a>
+  <nav class="side-nav" aria-label="主功能">
+    <a href="/#home" data-nav="home"><span class="nav-mark" aria-hidden="true">⌂</span>工作台首页</a>
+    <p>创作</p>
+    <a href="/#image" data-nav="image"><span class="nav-mark" aria-hidden="true">▧</span>AI 生图</a>
+    <a href="/#image-edit" data-nav="image-edit"><span class="nav-mark" aria-hidden="true">✎</span>图片编辑</a>
+    <a href="/#poster" data-nav="poster"><span class="nav-mark" aria-hidden="true">▤</span>海报工作台</a>
+    <a href="/#ppt" data-nav="ppt"><span class="nav-mark" aria-hidden="true">▣</span>PPT 工作台</a>
+    <a href="/#chat" data-nav="chat"><span class="nav-mark" aria-hidden="true">◫</span>AI 对话</a>
+    <a href="/#tools" data-nav="tools"><span class="nav-mark" aria-hidden="true">⊞</span>全部工具</a>
+    <a href="/#scenes" data-nav="scenes"><span class="nav-mark" aria-hidden="true">▥</span>模板与案例</a>
+    <p class="personal-nav-heading">个人空间</p>
+    <a href="/#projects" data-nav="projects"><span class="nav-mark" aria-hidden="true">▱</span>PPT 项目</a>
+    <a href="/#jobs" data-nav="jobs"><span class="nav-mark" aria-hidden="true">◷</span>生成任务</a>
+    <a href="/#assets" data-nav="assets"><span class="nav-mark" aria-hidden="true">▦</span>我的素材</a>
+    <a href="/#credits" data-nav="credits"><span class="nav-mark" aria-hidden="true">◎</span>积分与明细</a>
+  </nav>
+  <div class="sidebar-footer">
+    <a href="/admin" data-nav="admin" id="admin-nav" hidden><span class="nav-mark" aria-hidden="true">⚙</span>后台设置</a>
+    <button type="button" class="sidebar-account" data-action="open-account" aria-haspopup="dialog" aria-controls="account-dialog"><span id="sidebar-avatar" class="avatar" aria-hidden="true">访</span><span class="sidebar-account-copy"><b id="sidebar-name">访客体验</b><small id="sidebar-role">登录后保存作品</small></span><span class="sidebar-account-icon" aria-hidden="true">⌃</span></button>
+  </div>
+</aside>
+<div class="workspace">
+  <header class="topnav" data-od-id="topnav">
+    <div class="container row-between topnav-inner">
+      <div class="row"><button type="button" class="btn btn-ghost menu-button" data-action="toggle-sidebar" aria-expanded="false" aria-controls="sidebar">功能菜单</button><span id="page-label" class="header-location">工作台首页</span></div>
+      <div class="row"><a href="/#credits" class="pill">可用积分 <span id="balance" class="num">0.00</span></a><button type="button" class="btn btn-secondary" id="guest-login" data-action="open-auth" aria-haspopup="dialog">登录 / 注册</button></div>
+    </div>
+  </header>
+  <main id="content" class="container" aria-busy="true"><div class="auth-loading"><img class="logo-mark" src="/frontend/brand.png" alt="" width="35" height="35"><p>正在打开风沙生图工作台…</p></div></main>
+  <footer class="pagefoot" data-od-id="footer">
+    <div class="container row-between"><span>风沙生图工作台</span></div>
+  </footer>
+</div>
+<dialog id="auth-dialog" aria-labelledby="auth-title"></dialog>
+<dialog id="account-dialog" aria-labelledby="account-title"></dialog>
+<dialog id="job-detail-dialog" aria-labelledby="job-detail-title"></dialog>
+<dialog id="admin-user-dialog" aria-labelledby="admin-user-title"></dialog>
+<dialog id="modal" aria-labelledby="modal-title">
+  <div class="stack">
+    <h2 id="modal-title"></h2>
+    <p id="modal-text"></p>
+    <p id="modal-note" class="meta"></p>
+  </div>
+  <div class="row">
+    <button type="button" class="btn btn-secondary" data-action="close-modal">取消</button>
+    <button type="button" class="btn btn-primary" id="modal-confirm" data-action="confirm-modal">确认</button>
+  </div>
+</dialog>
+<dialog id="media-viewer" aria-labelledby="media-title" aria-describedby="media-help">
+  <header class="media-header">
+    <div class="media-heading"><h2 id="media-title">查看图片</h2><p id="media-dimensions"></p></div>
+    <div class="media-actions">
+      <button type="button" data-media-action="edit">送去图片编辑</button>
+      <button type="button" data-media-action="download">下载图片</button>
+      <button type="button" data-media-action="close" aria-label="关闭图片查看器" autofocus>×</button>
+    </div>
+  </header>
+  <div id="media-stage" class="media-stage">
+    <img id="media-image" draggable="false" alt="" hidden>
+    <p id="media-status" class="media-status" role="status" hidden></p>
+  </div>
+  <footer class="media-footer">
+    <p id="media-help">滚轮缩放 · 放大后可拖动 · 点击空白处或按 Esc 关闭</p>
+    <div class="media-zoom" role="group" aria-label="缩放">
+      <button type="button" data-media-action="out" aria-label="缩小">−</button>
+      <output id="media-scale" aria-label="缩放比例">—</output>
+      <button type="button" data-media-action="in" aria-label="放大">+</button>
+      <button type="button" data-media-action="fit">适应窗口</button>
+    </div>
+  </footer>
+</dialog>
+<div id="media-menu" role="menu" aria-label="图片操作" hidden>
+  <button type="button" role="menuitem" data-media-menu="open">查看大图</button>
+  <button type="button" role="menuitem" data-media-menu="edit">送去图片编辑</button>
+  <button type="button" role="menuitem" data-media-menu="poster">用作海报产品图</button>
+  <button type="button" role="menuitem" data-media-menu="download">下载图片</button>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+<input type="file" id="file-input" hidden>
+<noscript><div class="container section">请启用浏览器 JavaScript，体验原型的页面和操作。</div></noscript>
+<script>
+  window.workspaceLoadFailed = (reason) => {
+    const content = document.querySelector("#content[aria-busy]");
+    if (!content) return;
+    content.innerHTML = '<div class="auth-loading"><img class="logo-mark" src="/frontend/brand.png" alt="" width="35" height="35"><h1>工作台加载失败</h1><p id="boot-reason"></p><div class="row"><a class="btn btn-primary" href="/login">返回登录</a><button class="btn btn-secondary" type="button" id="boot-retry">重试</button></div></div>';
+    document.querySelector("#boot-reason").textContent = reason || "请用项目的启动脚本重新打开。";
+    document.querySelector("#boot-retry").onclick = () => location.reload();
+    content.removeAttribute("aria-busy");
+  };
+  window.addEventListener("error", event => {
+    if (event.target instanceof HTMLScriptElement && !event.target.hasAttribute("data-optional")) window.workspaceLoadFailed("页面脚本未能加载，请刷新后重试。");
+  }, true);
+  setTimeout(() => window.workspaceLoadFailed("等待本地服务响应超时。"), 10000);
+</script>
+<script src="/frontend/media.js" defer></script>
+<script src="/frontend/raster.js" defer></script>
+<script src="/frontend/commercial.js" defer></script>
+<script src="/frontend/ppt-templates.js" defer></script>
+<script src="/frontend/workbench.js" defer></script>
+<script src="/frontend/poster.js" defer></script>
+<script src="/frontend/projects.js" defer></script>
+<script src="/frontend/image-regions.js" defer></script>
+<script src="/frontend/animation.js" defer data-optional></script>
+<script src="/frontend/app.js" defer></script>
+</body>
+</html>

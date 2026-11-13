@@ -1,0 +1,111 @@
+.job-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.job-spinner {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: job-spin .9s linear infinite;
+}
+.job-elapsed {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.output-job-frame { position: relative; }
+.output-job-slot {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  max-width: calc(100% - 12px);
+  pointer-events: none;
+  font-size: 12px;
+}
+.output-job-slot:empty { display: none; }
+.output-job-slot .job-progress {
+  padding: 4px 8px;
+  border: 1px solid #b5cbb34d;
+  border-radius: 7px;
+  background: #111917f2;
+  color: #eff3eb;
+}
+.output-job-slot.is-placeholder {
+  inset: 0;
+  max-width: none;
+  display: grid;
+  place-items: center;
+  padding: 7px;
+  background: #18221e;
+}
+.output-job-slot.is-placeholder:has([data-job-since]) {
+  background: linear-gradient(112deg, #18221e 35%, #26382e 51%, #18221e 67%) 0 0 / 220% 100%;
+  animation: job-placeholder-sweep 3s linear infinite;
+}
+.job-preview-image {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  margin: 10px auto 0;
+  border-radius: 8px;
+  object-fit: contain;
+}
+.ppt-stream-preview {
+  padding: 13px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--field);
+}
+[data-ppt-stream-output] {
+  max-height: min(40vh, 360px);
+  margin-top: 7px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.75;
+}
+@keyframes job-spin { to { transform: rotate(1turn); } }
+@keyframes job-placeholder-sweep { to { background-position: -220% 0; } }
+.ppt-export-status {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--field);
+}
+.ppt-export-status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ppt-export-status .job-elapsed { margin-inline-start: auto; color: var(--accent); font-weight: 700; }
+.ppt-export-status p { margin: 0; }
+.ppt-export-track {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--border);
+}
+.ppt-export-track::after {
+  content: "";
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  animation: ppt-export-sweep 1.25s ease-in-out infinite alternate;
+}
+@keyframes ppt-export-sweep { to { transform: translateX(138%); } }
+@media (prefers-reduced-motion: reduce) {
+  .job-spinner, .output-job-slot.is-placeholder:has([data-job-since]), .ppt-export-track::after { animation: none; }
+}
+#job-detail-dialog { width: min(840px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); overflow: auto; }
+.job-detail-body { margin-top: 14px; overflow-wrap: anywhere; }
+.job-detail-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.job-detail-image { padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.job-detail-image img { display: block; width: 100%; max-height: 260px; object-fit: contain; }
+.job-detail-prompt { white-space: pre-wrap; }
+.ds-table .btn[data-job-title] { padding: 0; text-align: left; min-height: 0; }
+@media (max-width: 600px) { .job-detail-images { grid-template-columns: 1fr; } }

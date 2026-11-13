@@ -1,0 +1,184 @@
+.animation-composer {
+  container: animation-composer / inline-size;
+  padding: clamp(16px, 2vw, 26px);
+  margin-bottom: 18px;
+}
+
+.animation-header {
+  margin-bottom: 16px;
+}
+
+.animation-header h2 {
+  margin-bottom: 4px;
+  font-size: 20px;
+}
+
+.animation-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.animation-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 7px;
+}
+
+.animation-add .btn,
+.animation-export .btn {
+  white-space: nowrap;
+}
+
+.animation-clips {
+  list-style: none;
+  margin: 10px 0;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+  max-height: 290px;
+  overflow: auto;
+}
+
+.animation-clip {
+  display: grid;
+  grid-template-columns: 14px 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--field);
+}
+
+.animation-grip {
+  color: var(--muted);
+  cursor: grab;
+  user-select: none;
+}
+
+.animation-receiving,
+.animation-clip.animation-drop-row {
+  border-color: var(--accent);
+}
+
+.animation-clip img {
+  display: block;
+  width: 40px;
+  height: 40px;
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.animation-clip-info {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.animation-clip-info strong {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+}
+
+.animation-duration {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.animation-duration input {
+  width: 58px;
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
+.animation-clip-actions {
+  display: flex;
+}
+
+.animation-clip-actions .btn {
+  min-width: 24px;
+  min-height: 32px;
+  padding: 0 5px;
+}
+
+.animation-options {
+  display: flex;
+  align-items: end;
+  gap: 13px;
+  margin-top: 12px;
+}
+
+.animation-options .field {
+  flex: 1;
+}
+
+.animation-loop {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 41px;
+  white-space: nowrap;
+}
+
+.animation-fit-note {
+  margin-top: 6px;
+}
+
+.animation-drop-hint,
+.animation-preview {
+  display: grid;
+  place-items: center;
+  text-align: center;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  background: var(--field);
+}
+
+.animation-drop-hint {
+  min-height: 88px;
+  margin: 10px 0;
+  padding: 10px;
+}
+
+.animation-preview {
+  min-height: 182px;
+  padding: 10px;
+}
+
+.animation-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 290px;
+  object-fit: contain;
+}
+
+.animation-error {
+  margin-top: 8px;
+  color: #ffae9e;
+}
+
+.animation-export {
+  margin-top: 10px;
+}
+
+@container animation-composer (max-width: 575px) {
+  .animation-layout {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+}
+
+@container animation-composer (max-width: 325px) {
+  .animation-add .input {
+    grid-column: 1 / -1;
+  }
+}

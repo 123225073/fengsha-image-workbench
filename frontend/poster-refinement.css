@@ -1,0 +1,62 @@
+.poster-project-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.poster-project-controls strong {
+  flex: 1 1 160px;
+  overflow-wrap: anywhere;
+}
+.poster-project-controls select { width: auto; max-width: min(100%, 260px); }
+.poster-task-history summary { color: var(--muted); cursor: pointer; padding: 6px 0; }
+.poster-task-history[open] .workbench-job-note { margin-top: 6px; }
+
+.poster-await {
+  min-height: 185px;
+  min-width: min(100%, 232px);
+  background: var(--field);
+}
+
+.poster-empty-copy .btn { margin-top: 4px; }
+.poster-stage-toolbar { gap: 8px; flex-wrap: wrap; }
+.poster-stage-toolbar .btn-primary { white-space: nowrap; }
+.poster-gallery {
+  min-height: 0;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 184px), 1fr));
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.poster-sizes .poster-size-row[data-poster-selected="true"] { border-inline-start: 2px solid var(--accent); }
+.poster-result-image { position: relative; }
+.poster-result-image > [data-poster-art] { height: 100%; }
+.poster-preview-pending { position: absolute; inset: 0; display: grid; place-items: center; padding: 12px; }
+.poster-result-image:has(img[src]) .poster-preview-pending { display: none; }
+.poster-control-fields { min-width: 0; }
+.poster-reference-group { gap: 8px; }
+.poster-reference-group .upload-item > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (min-width: 1111px) {
+  .poster-studio {
+    --poster-work-height: var(--work-area-height);
+    grid-template-columns: minmax(162px, 184px) minmax(0, 1fr) minmax(294px, 340px);
+    align-items: stretch;
+  }
+  .poster-stage { height: var(--poster-work-height); grid-template-rows: auto minmax(0, 1fr) auto; }
+  .poster-stage-art { min-height: 0; }
+  .poster-controls { display: grid; height: var(--poster-work-height); grid-template-rows: minmax(0, 1fr) auto; gap: 12px; }
+  .poster-control-fields { overflow: auto; min-height: 0; scrollbar-width: thin; padding: 2px 4px; }
+  .poster-output [data-job-summary], .poster-stage-progress { max-height: 7rem; overflow: auto; scrollbar-width: thin; }
+  .poster-result-image { max-height: 50dvh; }
+}
+
+@media (max-width: 670px) {
+  .poster-stage.is-results { grid-row: 1; }
+  .poster-gallery { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: min(77%, 240px); }
+}
