@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([switch]$CheckOnly, [switch]$InstallUpscale, [switch]$NoBrowser)
+param([switch]$CheckOnly, [switch]$InstallUpscale, [switch]$NoBrowser, [string]$PythonExe)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -18,7 +18,21 @@ function Confirm-Install([string]$Message) {
     return (Read-Host 'Type Y to install, or press Enter to skip') -eq 'Y'
 }
 
+function Test-ProjectPython([string]$Executable, [switch]$Dependencies) {
+    if (-not $Executable -or -not (Test-Path -LiteralPath $Executable -PathType Leaf)) { return $false }
+    $probe = "import sys,sysconfig; assert (3,12) <= sys.version_info[:2] <= (3,13); assert sysconfig.get_platform() == 'win-amd64'"
+    if ($Dependencies) { $probe += '; import cryptography, PIL.Image, pptx, pypdf, docx, openpyxl, vtracer' }
+    try {
+        & $Executable -c $probe 2>$null | Out-Null
+        return $LASTEXITCODE -eq 0
+    } catch { return $false }
+}
+
 function Find-Python {
+    if ($PythonExe) {
+        if (-not (Test-ProjectPython $PythonExe)) { throw 'The supplied -PythonExe must be a working x64 Python 3.12 or 3.13.' }
+        return (Resolve-Path -LiteralPath $PythonExe).Path
+    }
     $candidates = @($privatePython)
     $launcher = Get-Command py.exe -ErrorAction SilentlyContinue
     if ($launcher) {
@@ -32,12 +46,7 @@ function Find-Python {
     $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
     if ($pythonCommand -and $pythonCommand.Source -notmatch '\\WindowsApps\\') { $candidates += $pythonCommand.Source }
     foreach ($path in $candidates) {
-        if ($path -and (Test-Path -LiteralPath $path -PathType Leaf)) {
-            try {
-                & $path -c "import sys,sysconfig; raise SystemExit(not ((3,12) <= sys.version_info[:2] <= (3,13) and sysconfig.get_platform()=='win-amd64'))" 2>$null
-                if ($LASTEXITCODE -eq 0) { return $path }
-            } catch { continue }
-        }
+        if (Test-ProjectPython $path) { return $path }
     }
 }
 
@@ -98,7 +107,13 @@ $disk = [System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($root))
 Write-Host ('Free space: {0:N1} GB on {1}' -f ($disk.AvailableFreeSpace / 1GB), $disk.Name)
 $python = Find-Python
 if ($python) { Write-Host ('Python: ' + (& $python --version)) }
-else { Write-Host 'Python x64 3.12 or 3.13: required for the main app.' }
+else { Write-Host 'Checking the existing project Python environment.' }
+$venvReady = Test-ProjectPython $venvPython
+$dependenciesReady = $venvReady -and (Test-ProjectPython $venvPython -Dependencies)
+if ($dependenciesReady) { Write-Host 'Project Python environment: ready.' }
+elseif ($venvReady) { Write-Host 'Project Python environment: dependency repair is required.' -ForegroundColor Yellow }
+elseif (Test-Path -LiteralPath $venvPython) { Write-Host 'Project Python environment: broken or its original Python has moved. The launcher can repair it in place.' -ForegroundColor Yellow }
+else { Write-Host 'Project Python environment: not installed yet.' }
 $vulkan = Test-Path -LiteralPath (Join-Path $env:windir 'System32\vulkan-1.dll') -PathType Leaf
 Write-Host ('Optional Real-ESRGAN: files present = {0}; Vulkan loader present = {1}' -f (Test-UpscaleInstall $engineDirectory), $vulkan)
 if ($CheckOnly -or $InstallUpscale) {
@@ -126,7 +141,7 @@ finally { $listener.Stop() }
 
 $marker = Join-Path $root '.venv\requirements.sha256'
 $requirementsHash = (Get-FileHash -LiteralPath $requirements -Algorithm SHA256).Hash
-$installed = (Test-Path -LiteralPath $venvPython) -and (Test-Path -LiteralPath $marker) -and
+$installed = $dependenciesReady -and (Test-Path -LiteralPath $marker) -and
     (Get-Content -LiteralPath $marker -Raw).Trim() -eq $requirementsHash
 if (-not $installed -and $disk.AvailableFreeSpace -lt 512MB) { throw 'Free at least 512 MB in the project drive for the first installation.' }
 if (-not $installed) {
@@ -149,14 +164,27 @@ if (-not $installed) {
         $python = $privatePython
     }
     if (-not (Confirm-Install 'Required: prepare the project environment and install Python packages from requirements.txt.')) { return }
-    if (-not (Test-Path -LiteralPath $venvPython)) {
+    if (-not $venvReady) {
+        # Recreate launcher links and pyvenv.cfg in place. Do not clear the
+        # directory: installed packages and unrelated project files survive.
         & $python -m venv (Join-Path $root '.venv')
         if ($LASTEXITCODE) { throw 'Could not create the project Python environment.' }
+        if (-not (Test-ProjectPython $venvPython)) { throw 'The project Python environment still cannot start after repair.' }
     }
-    & $venvPython -m pip install --disable-pip-version-check --only-binary=:all: -r $requirements
+    $pipReady = try { & $venvPython -m pip --version 2>$null | Out-Null; $LASTEXITCODE -eq 0 } catch { $false }
+    if (-not $pipReady) {
+        & $venvPython -m ensurepip --upgrade
+        if ($LASTEXITCODE) { throw 'Could not repair pip in the project environment.' }
+    }
+    $installArgs = @('-m', 'pip', 'install', '--disable-pip-version-check', '--only-binary=:all:', '-r', $requirements)
+    # A different minor Python version can leave incompatible binary wheels
+    # behind. Import checks decide whether replacing those packages is needed.
+    if (-not (Test-ProjectPython $venvPython -Dependencies)) { $installArgs += '--force-reinstall' }
+    & $venvPython @installArgs
     if ($LASTEXITCODE) { throw 'Dependency installation failed. Check your internet connection and run this launcher again.' }
     & $venvPython -m pip check
     if ($LASTEXITCODE) { throw 'Python dependencies are inconsistent.' }
+    if (-not (Test-ProjectPython $venvPython -Dependencies)) { throw 'Some required Python packages still cannot load. The environment was not marked ready.' }
     Set-Content -LiteralPath $marker -Value $requirementsHash -Encoding ascii
 }
 

@@ -755,7 +755,7 @@ function pptLanguageRequest(ppt, model, message = "") {
     .slice(-4).reverse().map(turn => turn.evidenceTurnId);
   return {modelId: model.id, tokenRates: model.tokenRates, requestId: crypto.randomUUID(),
     sessionId: ppt.sessionId, projectId: state.activeProjectId || "",
-    brief, style: ppt.style, level: ppt.level, templateGuide: workspacePptTemplates.outlineGuide(ppt.style),
+    brief, style: ppt.style, level: ppt.level, requirements: ppt.requirements || {}, templateGuide: workspacePptTemplates.outlineGuide(ppt.style),
     assetIds: pptSlots.map(key => ui.file[key]?.id).filter(Boolean), history,
     evidenceTurnIds, ...research};
 }
@@ -971,7 +971,6 @@ function buildPptPages(phase) {
   }
   const model = modelFor("image", "generate", ppt.model).selected;
   const keepLayout = modelFor("image", "reference", model?.id).options.some(item => item.id === model?.id);
-  const reviewModel = !board && ppt.autoReview !== false ? modelFor("chat", "vision").selected : null;
   const requests = indexes.map(index => {
     const edit = pptPageEdit(index);
     const existing = [batch[index], !board ? ppt.boards[index] : null].find(visualExists);
@@ -980,7 +979,7 @@ function buildPptPages(phase) {
       (existing && keepLayout ? "\n沿用参考页未要求修改的布局和内容。" : "");
     return {label: `PPT ${board ? "分镜" : "成稿"} · 第 ${index + 1} 页`, prompt,
       size, imageIds: existing && keepLayout ? [existing] : [],
-      context: {index, phase: board ? "board" : phase, regenerate: single, reviewModel: reviewModel?.id}};
+      context: {index, phase: board ? "board" : phase, regenerate: single}};
   });
   return confirmImages("ppt", model, requests, () => {
     ppt.stage = board ? 2 : 3;
@@ -1262,7 +1261,7 @@ function markPptText() {
 function pptExportStatus(ppt) {
   const task = ui.pptExport;
   if (task?.ppt === ppt) {
-    const message = task.editable ? "正在识别文字并制作可编辑 PPTX" : "正在打包原图 PPTX";
+    const message = task.native ? "正在按大纲排版，制作原生可编辑 PPTX" : task.editable ? "正在识别文字并制作可编辑 PPTX" : "正在打包原图 PPTX";
     return `<div class="ppt-export-status" data-ppt-export-active>
       <div class="ppt-export-status-line"><span class="job-spinner" aria-hidden="true"></span>
         <strong role="status">${message}</strong>${runningElapsed(task.started)}</div>
@@ -1273,28 +1272,85 @@ function pptExportStatus(ppt) {
   if (result?.ppt !== ppt) return "";
   if (result.error) return `<p class="ppt-export-status" role="status">${esc(result.error)}</p>`;
   return `<div class="ppt-export-status" role="status"><strong>下载已开始 · 耗时 ${result.seconds} 秒</strong>
+    ${result.slides ? `<p class="meta">共 ${result.slides} 页${result.continued ? `，长内容自动增加 ${result.continued} 页，正文已完整保留` : ""}。</p>` : ""}
     ${result.imagePages ? `<p class="meta">第 ${esc(result.imagePages)} 页按原图导出。</p>` : ""}
     ${result.reviewPages ? `<p class="meta">第 ${esc(result.reviewPages)} 页有文字保留在底图，可圈选补充。</p>` : ""}</div>`;
 }
 
-async function savePpt(editable) {
+const pptLayouts = {cover: "封面", section: "章节", points: "要点", comparison: "对照", process: "流程", closing: "结尾"};
+
+function parsePptOutline(value) {
+  const pages = [];
+  for (const line of value.replaceAll("\r", "").split("\n")) {
+    const heading = /^#{1,3}\s+(.+?)\s*$/.exec(line);
+    if (heading) {
+      if (!heading[1].trim()) throw new Error("页标题不能为空，请在 # 后填写标题。");
+      pages.push([heading[1].trim(), ""]);
+    }
+    else if (pages.length) pages[pages.length - 1][1] += line + "\n";
+    else if (line.trim()) throw new Error("请用 # 页标题 开始每一页，再填写正文。");
+  }
+  if (!pages.length || pages.length > 24) throw new Error("请提供 1 至 24 页大纲，用 # 页标题 分隔。");
+  pages.forEach(([title, detail], index) => {
+    if (title.length > 120 || detail.trim().length > 2000) throw new Error(`第 ${index + 1} 页过长：标题最多 120 字，正文最多 2000 字，请拆页。`);
+    if (!detail.trim()) throw new Error(`请补充第 ${index + 1} 页正文。`);
+    pages[index][1] = detail.trim();
+  });
+  return pages;
+}
+
+function openManualPptOutline() {
+  if (!requireAccount(openManualPptOutline)) return;
+  if (pending.has("ppt") || scopeInProgress("ppt") || ui.pptExport) return notify("请等待当前 PPT 任务结束。");
+  const ppt = state.ppt, owner = identity;
+  const dialog = document.createElement("dialog");
+  dialog.className = "ppt-manual-outline";
+  dialog.setAttribute("aria-labelledby", "ppt-manual-title");
+  dialog.innerHTML = `<form class="stack"><h2 id="ppt-manual-title">整理已有大纲</h2>
+    <p class="meta">每页以「# 页标题」开始，下一行填写正文。支持 1 至 24 页，内容只在本地整理。</p>
+    <label class="field">逐页内容<textarea class="textarea" name="outline" rows="15" maxlength="52000" placeholder="# 项目阶段汇报&#10;面向部门负责人，确认本阶段结果与下一步安排。&#10;&#10;# 当前进展&#10;填写已确认的结果和依据。" required>${esc(ppt.outline.map(([title, detail]) => `# ${title}\n${detail}`).join("\n\n"))}</textarea></label>
+    ${ppt.outline.length ? '<p class="meta">应用后替换当前大纲和页面安排；已生成图片仍保留在素材库。</p>' : ""}
+    <p class="status-line" role="status"></p><div class="row"><button type="button" class="btn btn-secondary" data-close>取消</button><button class="btn btn-primary">应用大纲</button></div></form>`;
+  dialog.querySelector("[data-close]").onclick = () => dialog.close();
+  dialog.querySelector("form").onsubmit = event => {
+    event.preventDefault();
+    if (owner !== identity || state.ppt !== ppt) return dialog.close();
+    try {
+      const outline = parsePptOutline(dialog.querySelector("textarea").value);
+      resetDeck();
+      ppt.outline = outline;
+      ppt.stage = ppt.maxStage = 1;
+      save();
+      dialog.close();
+      render();
+    } catch (error) { dialog.querySelector('[role="status"]').textContent = error.message; }
+  };
+  dialog.addEventListener("close", () => dialog.remove(), {once: true});
+  document.body.append(dialog);
+  dialog.showModal();
+}
+
+async function savePpt(editable, native = false) {
+  if (!requireAccount()) return;
   const ppt = state.ppt;
   if (ui.pptExport) return;
-  const slides = ppt.outline.map(([title], index) => ({
+  const slides = native ? ppt.outline.map(([title, detail, layout], index) => ({title, detail, layout: layout || (index === 0 ? "cover" : "points")})) : ppt.outline.map(([title], index) => ({
     title, assetId: ppt.pages[index], textboxes: editable ? ppt.textboxes[index] || [] : [],
     preserveImage: editable && ppt.pageEdits?.[index]?.preserveImage === true
   }));
-  if (!slides.length || slides.some(slide => !visualExists(slide.assetId))) return notify("请先补齐全部成稿。");
+  if (!slides.length) return notify("请先确认大纲。");
+  if (native && slides.some(slide => !slide.title?.trim() || !slide.detail?.trim())) return notify("请填写每一页的标题和正文后导出。");
+  if (!native && slides.some(slide => !visualExists(slide.assetId))) return notify("请先补齐全部成稿。");
   if (editable && slides.every(slide => slide.preserveImage)) return notify("所有页面均设为保留原图。取消至少一页的设置，或直接导出原图。");
   const owner = identity;
   const title = slides[0].title || "演示文稿";
-  const task = {ppt, editable, started: Math.floor(Date.now() / 1000)};
+  const task = {ppt, editable, native, started: Math.floor(Date.now() / 1000)};
   ui.pptExport = task;
   ui.pptExportResult = null;
   render();
   try {
     const result = await fetch("/api/ppt/export", {method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({slides, editable, auto: editable})});
+      body: JSON.stringify(native ? {format: "native", slides, template: workspacePptTemplates.nativeTemplate(ppt.style)} : {slides, editable, auto: editable})});
     if (!result.ok) {
       const failure = await result.json().catch(() => ({}));
       throw new Error(failure.error || "导出失败，请重试。");
@@ -1304,9 +1360,11 @@ async function savePpt(editable) {
     const href = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = href;
-    link.download = title + (editable ? "-可编辑" : "-原图") + ".pptx";
+    link.download = title.replace(/[\\/:*?"<>|]/g, "_") + (native ? "-原生可编辑" : editable ? "-图片文字可编辑" : "-原图") + ".pptx";
     link.click();
     ui.pptExportResult = {ppt, seconds: jobSeconds(task.started),
+      slides: Number(result.headers.get("X-PPT-Slide-Count")) || slides.length,
+      continued: Number(result.headers.get("X-PPT-Continued-Slides")) || 0,
       imagePages: result.headers.get("X-PPT-Image-Only-Pages")?.replaceAll(",", "、"),
       reviewPages: result.headers.get("X-PPT-Review-Pages")?.replaceAll(",", "、")};
     setTimeout(() => URL.revokeObjectURL(href), 30000);

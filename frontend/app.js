@@ -49,6 +49,7 @@ const imageExamples = [
 ];
 
 const routeLabels = { home: "工作台首页", tools: "全部工具", scenes: "模板与案例", image: "AI 生图", "image-edit": "图片编辑", poster: "海报工作台", ppt: "PPT 工作台", chat: "AI 对话", jobs: "生成任务", projects: "PPT 项目", assets: "我的素材", credits: "积分与明细", admin: "后台设置" };
+routeLabels.skills = "Agent 与 Skills";
 const workspaceFields = ["image", "poster", "ppt", "assets", "projects", "uploads", "activeProjectId", "standaloneDrafts"];
 const imageRatios = ["1:1", "4:3", "3:2", "16:9", "5:4", "7:5", "2:1", "21:9", "3:4", "2:3", "9:16", "4:5", "5:7", "1:2", "9:21"];
 const resolutions = { "512 px": 512, "1K": 1024, "1080 px": 1080, "2K": 2048, "3K": 3072, "3840 px": 3840, "4K": 4096 };
@@ -79,7 +80,7 @@ function initialState() {
     standaloneDrafts: {},
     image: { tool: "mask", prompt: "", ratio: "1:1", resolution: "source", width: 1024, height: 1024, candidates: [], outputs: {}, adopted: "", selection: null, text: "" },
     poster: { title: "", subtitle: "", date: "", variant: 0, selected: "main", exports: ["main", "square", "wide"] },
-    ppt: { brief: "", level: "简报", style: "商务深蓝", stage: 0, maxStage: 0, active: 0, outline: [], boards: [], pages: [], history: {}, textboxes: {},
+    ppt: { brief: "", requirements: {}, level: "简报", style: "基础·商务蓝", stage: 0, maxStage: 0, active: 0, outline: [], boards: [], pages: [], history: {}, textboxes: {},
       discussion: [], discussionDraft: "", sourceWarnings: [], boardHistory: {}, pageEdits: {}, resolution: "1920x1080" }
   };
 }
@@ -94,6 +95,7 @@ let writes = Promise.resolve();
 let latestWorkspaceSave = writes;
 let saveTimer;
 let saveDirty = false;
+let savePending = 0;
 const ui = { route: "home", category: "全部", search: "", imageView: "原图", picked: "", selecting: false, homeMode: "image", homePrompt: "", file: {}, fileTarget: "", authMode: "login", assetType: "全部", assetSearch: "", files: [], users: [], localUrls: new Set(), uploading: false };
 let modalAction = null;
 let toastTimer;
@@ -217,10 +219,17 @@ function queueWrite(operation) {
   writes = result.catch(() => {});
   return result;
 }
+function setWorkspaceSaveError(error = null) {
+  const notice = document.querySelector("#workspace-save-notice");
+  if (!notice) return;
+  notice.hidden = !error;
+  if (error) notice.querySelector("span").textContent = "草稿尚未保存，当前内容仍保留。" + error.message;
+}
 function flushSave(strict = false) {
   clearTimeout(saveTimer);
   if (!saveDirty || !account) return strict ? latestWorkspaceSave : writes;
   saveDirty = false;
+  savePending++;
   const owner = identity;
   const result = queueWrite(async () => {
     if (owner !== identity) return;
@@ -228,9 +237,16 @@ function flushSave(strict = false) {
     if (owner !== identity) return;
     revision = result.revision;
     await workspaceProjects.sync();
+    if (owner === identity) setWorkspaceSaveError();
   });
-  latestWorkspaceSave = result;
-  return strict ? result : result.catch(error => { if (identity === owner) notify(error.message); });
+  const tracked = result.catch(error => {
+    if (identity === owner) { saveDirty = true; setWorkspaceSaveError(error); }
+    throw error;
+  }).finally(() => { savePending--; });
+  latestWorkspaceSave = tracked;
+  // A strict caller handles rejection; keep the shared reference handled too.
+  tracked.catch(() => {});
+  return strict ? tracked : tracked.catch(error => { if (identity === owner) notify("尚未保存：" + error.message + " 当前内容仍保留，请恢复连接后重试。"); });
 }
 function save() {
   if (!account) return;
@@ -538,7 +554,7 @@ function outputControls(image, modelSizes = []) {
 }
 
 function imageParameterPanel(draft, operation, modelSizes, count) {
-  const open = ui.imageParameters?.[operation];
+  const open = ui.imageParameters?.[operation] ?? (draft === state.image && draft.tool === "crop");
   let description = `${draft.resolution} · ${draft.ratio}`;
   if (followsEditSource(draft)) description = "跟随原图";
   if (draft.resolution === "custom") description = "自定义尺寸";
@@ -1060,22 +1076,37 @@ function pptView() {
       ${button(pending.get("ppt") === "outline" ? "正在生成大纲…" : "需求已确认，生成大纲", "ppt-outline", "", "primary", ppt.discussion.length ? locked : "disabled")}</div>
       <p class="meta">需求沟通和大纲按语言模型实际 Token 结算。</p></div>
       <aside class="card stack ppt-intake-options">
+      <details class="ppt-requirements"><summary>补充汇报要求（选填）</summary><div class="stack">
+        <p class="meta">已有明确要求可在这里补充，也可以直接在对话中说明。</p>
+        <label class="field">听众<input class="input" data-field="ppt-requirement-audience" maxlength="160" value="${esc(ppt.requirements?.audience || '')}" placeholder="例如部门负责人、业务新同事" ${locked}></label>
+        <label class="field">希望听众采取的行动<input class="input" data-field="ppt-requirement-goal" maxlength="300" value="${esc(ppt.requirements?.goal || '')}" placeholder="例如批准试点预算、掌握操作流程" ${locked}></label>
+        <div class="ppt-requirements-numbers"><label class="field">时长（分钟）<input class="input" type="number" min="1" max="240" data-field="ppt-requirement-duration" value="${esc(ppt.requirements?.duration || '')}" ${locked}></label>
+        <label class="field">期望页数<input class="input" type="number" min="1" max="24" data-field="ppt-requirement-pageCount" value="${esc(ppt.requirements?.pageCount || '')}" ${locked}></label></div>
+        <label class="field">必须保留的事实与限制<textarea class="textarea" data-field="ppt-requirement-mustInclude" maxlength="1200" placeholder="关键数据、来源、必须覆盖的内容或不应出现的信息" ${locked}>${esc(ppt.requirements?.mustInclude || '')}</textarea></label>
+      </div></details>
       <label class="field">详细程度<select class="input" data-field="ppt-level">${["简报","标准","详细"].map(value => `<option ${ppt.level === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
       ${workspacePptTemplates.summary(ppt.style, locked)}
+      ${button("已有内容，手动整理大纲", "ppt-manual-outline", "", "secondary", locked)}
+      <p class="meta">已有大纲可以直接排版导出，不必先调用模型。</p>
       ${modelSelect("ppt-language-model", "chat", "text", ppt.languageModel, "语言模型")}
       ${researchModeField("ppt-search-mode", ppt.searchMode, locked)}
       <p class="meta">「联网搜索并发送」会为本轮重新查找公开资料。回复可展开查看来源。</p></aside></div>`;
   } else if (ppt.stage === 1) {
     body = `<div class="work-grid"><div class="card stack"><h2>逐页确认大纲</h2>
-      ${ppt.outline.map(([title, detail], index) => `<div class="stack"><label class="outline-line"><span class="num">${index + 1}</span><input class="input" aria-label="第 ${index + 1} 页标题" data-field="ppt-title" data-index="${index}" maxlength="120" value="${esc(title)}" ${locked}></label><textarea class="textarea" aria-label="第 ${index + 1} 页内容" data-field="ppt-detail" data-index="${index}" maxlength="2000" ${locked}>${esc(detail)}</textarea></div>`).join("")}</div>
-      <aside class="card stack"><h3>${esc(ppt.level)} · 分镜设置</h3>
+      <p class="meta">这里的正文会直接进入可编辑 PPT。每页聚焦一个观点，长内容导出时会自动续页。</p>
+      ${ppt.outline.map(([title, detail, layout], index) => `<div class="stack ppt-outline-page"><label class="outline-line"><span class="num">${index + 1}</span><input class="input" aria-label="第 ${index + 1} 页标题" data-field="ppt-title" data-index="${index}" maxlength="120" value="${esc(title)}" ${locked}></label><textarea class="textarea" aria-label="第 ${index + 1} 页内容" data-field="ppt-detail" data-index="${index}" maxlength="2000" ${locked}>${esc(detail)}</textarea>
+      <label class="field">第 ${index + 1} 页版式<select class="input" data-field="ppt-layout" data-index="${index}" ${locked}>${Object.entries(pptLayouts).map(([key,label]) => `<option value="${key}" ${(layout || (index === 0 ? "cover" : "points")) === key ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>`).join("")}</div>
+      <aside class="card stack"><h3>样式与导出</h3>
       ${workspacePptTemplates.summary(ppt.style, locked, "更换模板")}
-      <p class="meta">模板用于生成分镜。大纲中的标题和内容会保留。</p>${scopeStatus("ppt")}
+      <section class="ppt-native-export stack"><h3>直接制作可编辑 PPT</h3><p class="meta">按已确认大纲和基础模板排版，标题、正文和形状可在 WPS / PowerPoint 中编辑。本地导出不调用模型。</p>
+      ${button(ui.pptExport?.native ? "正在制作…" : "导出原生可编辑 PPTX", "ppt-export-native", "", "primary", ui.pptExport ? "disabled" : locked)}
+      ${button("重新整理大纲", "ppt-manual-outline", "", "ghost", locked)}${pptExportStatus(ppt)}</section>
+      <details class="ppt-image-route"><summary>制作图片式页面</summary><div class="stack"><p class="meta">需要 AI 插画或复杂视觉设计时，可继续生成页面图。</p>${scopeStatus("ppt")}
       ${ppt.outlineWebSearch ? workspaceCommercial.searchSources(ppt.outlineWebSearch, "ppt-outline", true) : ""}
       ${modelSelect("ppt-model", "image", "generate", ppt.model)}
       ${pptResolutionControl(ppt)}
       <p class="meta">分镜就是完整页面图，满意可直接用来导出。</p>
-      ${button(pending.has("ppt") ? "正在提交…" : "确认大纲，生成分镜", "ppt-board", "", "primary", submitLocked)}</aside></div>`;
+      ${button(pending.has("ppt") ? "正在提交…" : "确认大纲，生成分镜", "ppt-board", "", "primary", submitLocked)}</div></details></aside></div>`;
   } else {
     const ready = ppt.stage === 3;
     const asset = ui.files.find(file => file.id === (ready ? ppt.pages : ppt.boards)[ppt.active]);
@@ -1128,14 +1159,15 @@ function pptView() {
         ${modelSelect("ppt-model", "image", "generate", ppt.model)}
         ${pptResolutionControl(ppt)}
         ${button("按所选分辨率重出本页", ready ? "ppt-redo" : "ppt-board-redo", "", "primary", submitLocked)}
-        ${ready ? `${modelFor("chat", "vision").selected ? `<label><input type="checkbox" data-field="ppt-auto-review" ${ppt.autoReview !== false ? "checked" : ""}> 成稿重出后自动校对和修复</label>` : ""}
+        ${ready ? `
           ${ppt.outline.some((_, index) => !visualExists(ppt.pages[index])) ? button("补齐缺失成稿", "ppt-final", "", "secondary", submitLocked) : ""}
           <div class="ppt-export-options stack">
             <label><input type="checkbox" data-field="ppt-preserve-image" ${edit.preserveImage === true ? "checked" : ""} ${ui.pptExport ? "disabled" : locked}> 本页只保留原图</label>
             ${button(`补充或校对本页文字${ppt.textboxes[ppt.active]?.length ? "（" + ppt.textboxes[ppt.active].length + "）" : ""}`, "ppt-mark-text", "", "secondary", asset && !ui.pptExport ? locked : "disabled")}
-            ${button(ui.pptExport?.editable ? "正在导出可编辑 PPTX…" : "导出可编辑 PPTX", "ppt-export", "editable", "primary", ui.pptExport ? "disabled" : locked)}
+            ${button("按大纲导出原生可编辑 PPTX", "ppt-export-native", "", "primary", ui.pptExport ? "disabled" : locked)}
+            ${button(ui.pptExport?.editable ? "正在提取图片文字…" : "提取图片文字导出 PPTX", "ppt-export", "editable", "secondary", ui.pptExport ? "disabled" : locked)}
             ${pptExportStatus(ppt)}
-            <p class="meta">在 WPS 或 PowerPoint 中直接点击文字修改。图形和难以安全转换的文字保留在底图中。</p>
+            <p class="meta">原生版使用大纲排版；图片文字版保留页图并提取可识别的文字，图形和难识别文字仍在底图中，请校对。</p>
             ${button("导出原图 PPTX", "ppt-export", "image", "secondary", ui.pptExport ? "disabled" : locked)}
           </div>`
           : ""}
@@ -1534,6 +1566,7 @@ accountDialog.addEventListener("click", event => {
 accountDialog.addEventListener("close", () => { if (!accountDialog.open) accountDialog.replaceChildren(); });
 const adminSections = [
   ["models", "模型中心"],
+  ["skills", "Agent 与 Skills"],
   ["users", "用户管理"],
   ["templates", "模板管理"],
   ["access", "邀请码与积分"],
@@ -1606,6 +1639,7 @@ function adminView() {
   const section = activeAdminSection();
   const views = {
     models: () => workspaceCommercial.adminPanel(),
+    skills: () => workspaceCommercial.skillsPanel(true),
     users: adminUsersView,
     templates: () => workspaceProjects.adminPanel(),
     access: () => opsView("access"),
@@ -1659,6 +1693,7 @@ const views = {
   home: homeView, tools: toolView, image: generationView, "image-edit": imageView, poster: posterView, ppt: pptView,
   projects: workspaceProjects.view, assets: assetsView, credits: creditsView, admin: adminView,
   chat: workspaceCommercial.chatView, jobs: jobsView,
+  skills: () => page("创作指南", workspaceCommercial.skillsPanel(), "skills-guide", '<a href="/#chat">返回 AI 对话</a>'),
   scenes: workspaceProjects.templatesView
 };
 function render() {
@@ -1715,6 +1750,7 @@ async function refreshRoute() {
     }
     if (ui.route === "admin" && account?.role === "admin") {
       const section = activeAdminSection();
+      if (section === "skills") await workspaceCommercial.refreshSkills();
       if (section === "models") await workspaceCommercial.refresh("admin");
       if (section === "templates") await workspaceProjects.refresh("admin");
       if (section === "policy") {
@@ -1748,6 +1784,8 @@ async function refreshRoute() {
           detail.querySelector(".admin-users-table")?.scrollTo(left, top);
         }
       }
+    } else if (ui.route === "skills") {
+      await workspaceCommercial.refreshSkills();
     } else if (["projects", "scenes"].includes(ui.route)) {
       await workspaceProjects.refresh(ui.route);
     } else if (ui.route === "chat") {
@@ -2137,10 +2175,14 @@ const actions = {
   },
   logout: async () => {
     try {
-      await flushSave();
+      await flushSave(true);
       await api("auth/logout", "POST", {});
       location.replace("/");
     } catch (error) { notify(error.message); }
+  },
+  "retry-workspace-save": async () => {
+    try { await flushSave(true); notify("草稿已保存。"); }
+    catch (error) { notify(error.message); }
   },
   "refresh-users": refreshRoute,
   "manage-user": openAdminUserForm,
@@ -2432,6 +2474,8 @@ const actions = {
     render();
   },
   "ppt-outline": makeOutline,
+  "ppt-manual-outline": openManualPptOutline,
+  "ppt-export-native": () => savePpt(false, true),
   "ppt-discuss": () => discussPpt(),
   "ppt-search-send": () => discussPpt(true),
   "ppt-new-chat": () => switchPptChat(),
@@ -2608,7 +2652,6 @@ content.addEventListener("input", event => {
     state[field === "ppt-search-mode" ? "ppt" : "poster"].searchMode = value;
   }
   if (field === "ppt-resolution" && Object.hasOwn(pptResolutions, value)) state.ppt.resolution = value;
-  if (field === "ppt-auto-review") state.ppt.autoReview = event.target.checked;
   if (field === "ppt-preserve-image") pptPageEdit().preserveImage = event.target.checked;
   if (field === "image-prompt") imageDraft().prompt = value;
   if (field === "image-text") state.image.text = value;
@@ -2658,6 +2701,12 @@ content.addEventListener("input", event => {
     state.ppt[field.slice(4)] = value;
     state.ppt.maxStage = 0;
   }
+  if (field?.startsWith("ppt-requirement-")) {
+    state.ppt.requirements ||= {};
+    state.ppt.requirements[field.slice("ppt-requirement-".length)] = value;
+    state.ppt.maxStage = 0;
+  }
+  if (field === "ppt-layout") state.ppt.outline[Number(event.target.dataset.index)][2] = value;
   if (["ppt-title","ppt-detail"].includes(field)) {
     const ppt = state.ppt;
     const index = Number(event.target.dataset.index);
@@ -3108,6 +3157,11 @@ content.addEventListener("keydown", event => {
 });
 document.addEventListener("keydown", event => { if (event.key === "Escape") closeMenu(); });
 document.addEventListener("visibilitychange", () => { if (document.hidden && saveDirty) flushSave(); });
+window.addEventListener("beforeunload", event => {
+  if (!account || (!saveDirty && !savePending)) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
 api("session").then(applySession).then(syncRoute).catch(error => {
   window.workspaceLoadFailed?.(error.message);
 });

@@ -749,6 +749,16 @@
   .ppt-text-mark-image { position: relative; margin-inline: auto; width: fit-content; max-width: 100%; }
   .ppt-text-mark-image img { display: block; max-width: 100%; max-height: 53vh; cursor: crosshair; touch-action: none; user-select: none; }
   .ppt-text-mark-image span { position: absolute; pointer-events: none; border: 2px solid var(--accent); background: #b8d87730; }
+  .ppt-requirements > div { margin-top: 14px; }
+  .ppt-image-route > div { margin-top: 14px; }
+  .workspace-save-notice:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 24px; background: #46381e; color: #fff0c5; border-bottom: 1px solid #877344; }
+  .workspace-save-notice span { flex: 1 1 250px; overflow-wrap: anywhere; }
+  .ppt-requirements-numbers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .ppt-outline-page { padding-block: 16px; border-bottom: 1px solid var(--border); }
+  .ppt-outline-page .textarea { min-height: 145px; }
+  .ppt-native-export { padding-block: 16px; border-block: 1px solid var(--border); }
+  dialog.ppt-manual-outline { width: min(800px, calc(100% - 24px)); }
+  dialog.ppt-manual-outline textarea { min-height: 38vh; }
   @media (min-width: 971px) {
     .ppt-intake-grid, .ppt-review-grid { grid-template-columns: minmax(0, 1fr) minmax(290px, 23%); gap: 18px; }
   }

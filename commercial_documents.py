@@ -773,10 +773,16 @@ def _rebuild_editable_slide(data, manual, *, needs_review=None):
             except (DocumentError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
                 # The first pass is still usable when a supplemental scan fails.
                 pass
-    except DocumentError:
-        raise
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
-        raise DocumentError("本机文字识别暂不可用，请稍后重试。") from error
+    except (DocumentError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        if not manual:
+            if isinstance(error, DocumentError):
+                raise
+            raise DocumentError("本机文字识别暂不可用，请稍后重试。") from error
+        # Manual selections are already user-confirmed and do not require OCR.
+        # Keep unmarked text in the original image and report this page for review.
+        runs = []
+        if needs_review is not None:
+            needs_review.append(True)
 
     output = source.copy()
     overlays, marked = [], []

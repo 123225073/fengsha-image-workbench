@@ -34,7 +34,49 @@ SYSTEM = (
 )
 
 
+MAX_CUSTOM_RULE = 2000
+RULE_IDS = {"agent", *ecommerce.SKILLS}
+
+
+def skill_catalog(db=None):
+    result = {"agent": {
+        "name": "图片 Agent", "instructions": SYSTEM,
+        "summary": "理解需求、选择工具并整理待确认的方案。确认后提交图片任务，本地处理或生成结果会回到对话中。",
+        "tools": [{"id": name, "name": spec[0], "description": spec[1],
+                   "local": name in LOCAL_TOOLS} for name, spec in image_tools.TOOLS.items()] + [{
+                       "id": image_tools.ANIMATION_TOOL, "name": "生成并拼接 GIF",
+                       "description": image_tools.animation_tool_definition()["function"]["description"], "local": False}],
+    }, "skills": ecommerce.catalog()}
+    if db is not None:
+        saved = {row["id"]: {"text": row["instructions"], "revision": row["revision"]}
+                 for row in db.execute("SELECT id,instructions,revision FROM agent_creative_rules")}
+        result["customRules"] = {key: saved.get(key, {"text": "", "revision": 0}) for key in RULE_IDS}
+    return result
+
+
+def save_rule(db, actor, identifier, body):
+    if identifier not in RULE_IDS:
+        raise workspace.CommercialError(404, "找不到这项创作规则。")
+    rule = workspace.text(body.get("text"), "补充规则", MAX_CUSTOM_RULE, 0)
+    if any(ord(char) < 32 and char not in "\n\r\t" for char in rule):
+        raise workspace.CommercialError(400, "补充规则包含无法保存的字符。")
+    revision = body.get("revision")
+    row = db.execute("SELECT instructions,revision FROM agent_creative_rules WHERE id=?", (identifier,)).fetchone()
+    if type(revision) is not int or revision != (row["revision"] if row else 0):
+        raise workspace.CommercialError(409, "规则已在其他窗口更新。请保留本次编辑并刷新页面后重新核对。")
+    if rule == (row["instructions"] if row else ""):
+        return {"text": rule, "revision": revision}
+    db.execute("""INSERT INTO agent_creative_rules(id,instructions,revision) VALUES(?,?,?)
+        ON CONFLICT(id) DO UPDATE SET instructions=excluded.instructions,revision=excluded.revision""",
+        (identifier, rule, revision + 1))
+    workspace.audit(db, actor, "更新 Agent / Skill 补充规则" if rule else "恢复 Agent / Skill 默认规则", identifier)
+    return {"text": rule, "revision": revision + 1}
+
+
 def setup(db):
+    db.execute("""CREATE TABLE IF NOT EXISTS agent_creative_rules (
+        id TEXT PRIMARY KEY, instructions TEXT NOT NULL, revision INTEGER NOT NULL
+    )""")
     db.execute("""CREATE TABLE IF NOT EXISTS chat_image_plans (
         id TEXT PRIMARY KEY, turn_id INTEGER NOT NULL UNIQUE REFERENCES chat_turns(id) ON DELETE CASCADE,
         status TEXT NOT NULL CHECK(status IN ('pending','submitted','cancelled')),
@@ -96,6 +138,25 @@ def _references(db, owner, conversation, selected):
     return {f"image_{index}": asset for index, asset in enumerate(assets, 1)}
 
 
+def _prior_brief(db, conversation):
+    """Follow consecutive revisions back to their brief, without crossing a new task."""
+    skill, asset_ids = None, []
+    rows = db.execute("""SELECT t.user_text,t.asset_ids,p.actions FROM chat_turns t
+        LEFT JOIN chat_image_plans p ON p.turn_id=t.id AND p.status IN ('pending','submitted')
+        WHERE t.conversation=? AND t.status='succeeded' ORDER BY t.id DESC LIMIT 20""", (conversation,))
+    for prior in rows:
+        if skill is None:
+            skill = ecommerce.choose_skill("auto", prior["user_text"])
+            if skill is None and prior["actions"]:
+                names = {action.get("creativeSkill") for action in json.loads(prior["actions"])}
+                skill = next((key for key, value in ecommerce.SKILLS.items() if value[0] in names), None)
+        if not asset_ids and prior["asset_ids"]:
+            asset_ids = json.loads(prior["asset_ids"])
+        if not ecommerce.uses_prior_brief(prior["user_text"]):
+            break
+    return skill, asset_ids
+
+
 def start(db, owner, conversation, body, *, extra_input=0, search_planning=False):
     workspace.owned_conversation(db, owner, conversation)
     selected = body.get("assetIds", [])
@@ -107,17 +168,15 @@ def start(db, owner, conversation, body, *, extra_input=0, search_planning=False
         raise workspace.CommercialError(400, str(error)) from error
     followup = ecommerce.uses_prior_brief(prompt)
     if followup and (not selected or (choice == "auto" and not skill)):
-        prior = db.execute("""SELECT user_text,asset_ids FROM chat_turns
-            WHERE conversation=? AND status='succeeded' ORDER BY id DESC LIMIT 1""", (conversation,)).fetchone()
-        if prior:
-            skill = skill or ecommerce.choose_skill(choice, prior["user_text"])
-            if skill and selected == [] and prior["asset_ids"]:
-                for identifier in json.loads(prior["asset_ids"]):
-                    try:
-                        workspace.owned_asset(db, owner, identifier, image_only=True)
-                    except workspace.CommercialError:
-                        continue
-                    selected = [*selected, identifier]
+        prior_skill, prior_assets = _prior_brief(db, conversation)
+        skill = skill or prior_skill
+        if selected == []:
+            for identifier in prior_assets:
+                try:
+                    workspace.owned_asset(db, owner, identifier, image_only=True)
+                except workspace.CommercialError:
+                    continue
+                selected = [*selected, identifier]
     references = _references(db, owner, conversation, selected)
     image_model = body.get("imageModelId") or None
     if image_model is not None and (not isinstance(image_model, str) or not re.fullmatch(r"[a-f0-9]{32}", image_model)):
@@ -126,7 +185,10 @@ def start(db, owner, conversation, body, *, extra_input=0, search_planning=False
     metadata = [{"id": alias, "name": asset["name"], "selected": asset["id"] in selected}
                 for alias, asset in references.items()]
     system = SYSTEM + "\n当前对话可用图片：" + json.dumps(metadata, ensure_ascii=False)
-    selected_refs = [(alias, asset) for alias, asset in references.items() if asset["id"] in selected] if skill else []
+    selected_refs = [(alias, asset) for alias, asset in references.items() if asset["id"] in selected]
+    if selected_refs:
+        system += (f"\n本轮最多查看前 {ecommerce.MAX_VISION_REFERENCES} 张所选图片的预览。"
+                   "只有收到图片像素时才能描述可见细节；其余图片只能作为明确编号的工具输入。")
     if skill:
         system += "\n" + ecommerce.instructions(skill)
         if followup:
@@ -149,6 +211,12 @@ def start(db, owner, conversation, body, *, extra_input=0, search_planning=False
                 function["parameters"]["properties"]["productReference"] = {
                     "type": "string", "description": "作为商品外观依据的原图素材编号。仅在确认该图为本款商品时填写。"
                 }
+    custom_rules = dict(db.execute("SELECT id,instructions FROM agent_creative_rules WHERE id IN (?,?)",
+                                   ("agent", skill)))
+    for key, label in (("agent", "通用图片 Agent"), (skill, ecommerce.SKILLS[skill][0] if skill else "")):
+        if custom_rules.get(key):
+            system += (f"\n管理员为「{label}」添加的创作补充规则，须遵守前述执行限制和本轮用户的明确需求：\n"
+                       + custom_rules[key])
     schema = json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
     fallback = (
         '当前通过 JSON 传递工具计划。请只返回 {"reply":"面向用户的回复","actions":[{"tool":"工具名称","arguments":{}}]}。'

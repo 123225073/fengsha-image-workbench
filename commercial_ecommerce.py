@@ -39,9 +39,28 @@ VISION_TOKEN_BUDGET = 4096
 
 
 def catalog():
-    return [{"id": "auto", "name": "智能推荐"}, *(
-        {"id": key, "name": value[0]} for key, value in SKILLS.items()
-    )]
+    """Expose the same built-in guidance used by the Agent, without a model call."""
+    examples = {
+        "studio": "用这张商品实拍做一张干净白底主图，保留商品颜色和包装文字。",
+        "set": "为这款商品规划主图、卖点细节、使用场景三张套图，先让我确认。",
+        "campaign": "用这款商品做两张促销海报，尺寸分别为 1080x1440 和 1920x1080。活动信息以我提供的资料为准。",
+        "detail": "为这款商品整理详情页分屏方案，每屏一个卖点，先不要出图。",
+    }
+    return [{
+        "id": "auto", "name": "智能推荐", "builtIn": True,
+        "summary": "按需求中的商品主图、电商套图、促销海报或详情页词语推荐 Skill；未匹配时使用通用图片 Agent。",
+        "inputs": "用自然语言说明目标；需要保留商品外观时附商品实拍。",
+        "output": "对应的创作方案，或通用对话与图片操作计划。",
+        "example": "给这款商品做一套电商套图，先规划用途和画面。",
+        "instructions": "自动选择只在当前内置四种 Skill 中匹配。你也可以在 AI 对话中手动指定 Skill。连续补充沿用最近同一任务的 Skill；更换商品或明确不沿用时不继承旧商品依据。",
+        "tools": ["generate_image", "generate_from_reference"],
+    }, *({
+        "id": key, "name": value[0], "builtIn": True, "summary": value[1],
+        "inputs": "商品原图或外观说明、明确的用途与尺寸；价格、参数和配件需提供依据。",
+        "output": "可检查提示词、参考图、尺寸和积分的待确认计划。" if key != "detail" else "可继续修改的分屏内容方案；明确要求出图后才拟定图片计划。",
+        "example": examples[key], "instructions": instructions(key),
+        "tools": ["generate_image", "generate_from_reference"],
+    } for key, value in SKILLS.items())]
 
 
 def choose_skill(value, prompt):

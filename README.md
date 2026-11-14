@@ -2,6 +2,8 @@
 
 在本机浏览器使用的创作工作台，包含 AI 生图、图片编辑、海报、PPT 和图片 Agent。Windows 10/11 x64 可使用以下安装方式。macOS 版待后续适配。
 
+当前版本 **1.3.1**。在「后台设置 → Agent 与 Skills」查看内置规则及工具，并为 Agent 或单个 Skill 保存补充规则。PPT 工作台提供 4 套可预览的基础样式，可从大纲直接导出原生可编辑 PPTX。详见 [全功能验收与优化记录](docs/全功能验收与优化-20261114.md)。
+
 ## 下载安装
 
 1. 到 [最新版本](https://github.com/123225073/fengsha-image-workbench/releases/latest)，下载对应版本的 `fengsha-image-workbench-版本号-windows.zip`；历史恢复附件仅供回退。也可在 [GitHub 仓库](https://github.com/123225073/fengsha-image-workbench) 点 **Code → Download ZIP** 获取源码。在 Windows 资源管理器右键下载的 ZIP，若「属性」里有「解除锁定」，勾选后再解压到可写文件夹。
@@ -27,7 +29,7 @@
 
 | 功能 | 使用条件 |
 | --- | --- |
-| 浏览示例、账号、项目、素材库、裁剪、已有动图拼接、原图 PPTX 导出 | 安装主程序 |
+| 浏览示例、账号、项目、素材库、裁剪、已有动图拼接、原图 PPTX 与原生可编辑 PPTX 导出 | 安装主程序 |
 | AI 生图与编辑、GIF 分镜、SVG 描摹、海报、PPT 和 AI 对话 | 在后台接入自己的模型。GIF/SVG 原生输出取决于模型服务商 |
 | 图片 OCR、PPTX 自动提取文字 | 使用 Windows OCR 及对应语言识别包。没有对应语言包时，可用原图 PPTX 或手工标记文字。已有 Tesseract 也可使用 |
 | **可选本地超分** | 双击 **安装可选本地超分.cmd**，确认后下载官方 Real-ESRGAN。脚本检查 Vulkan，并用小图实测。弱显卡可跳过 |

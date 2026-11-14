@@ -121,7 +121,8 @@ const workspaceProjects = (() => {
   async function sync() {
     const current = syncOwner();
     const binding = current.current;
-    if (!binding || binding.blocked || binding.project.id !== state.activeProjectId) return;
+    if (!binding || binding.project.id !== state.activeProjectId) return;
+    if (binding.blocked) throw Object.assign(new Error("当前 PPT 项目存在版本冲突或已归档。请新建 PPT 项目并勾选带入当前草稿后保存。"), {projectConflict: true});
     const draft = workspaceDraft("ppt");
     const serialized = snapshot(draft);
     if (serialized === binding.snapshot) return;
@@ -335,7 +336,7 @@ const workspaceProjects = (() => {
     if (scope === "poster") return input("title", "海报标题", 30) + input("subtitle", "海报副标题", 40) + input("date", "活动时间", 32) +
       select("preset", "出图方向", Object.entries(posterPresets).map(([key, value]) => [key, value.name]), "auto") + text("prompt", "主视觉描述", 2000);
     if (scope === "ppt") return text("brief", "汇报需求", 6000) + select("level", "详细程度", labels(["简报", "标准", "详细"]), "简报") +
-      select("style", "视觉风格", labels(["商务深蓝", "科技", "极简"]), "商务深蓝");
+      select("style", "视觉风格", labels(["基础·商务蓝", "基础·极简灰", "基础·教育绿", "基础·暖白橙", "商务深蓝", "科技", "极简"]), "基础·商务蓝");
     if (scope === "chat") return text("prompt", "首条消息", 12000);
     return select("format", "生成格式", Object.entries(studioFormats), "still") + text("prompt", "生成提示词", 3000) +
       `<div class="row" data-template-still${settings.format && settings.format !== "still" ? " hidden" : ""}>${select("ratio", "画面比例", labels(imageRatios), "1:1")}${select("resolution", "分辨率", labels(Object.keys(resolutions)), "1K")}</div>`;

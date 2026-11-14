@@ -24,6 +24,7 @@ from urllib.parse import quote
 from PIL import Image, ImageDraw, ImageOps
 
 import commercial_documents as documents
+import commercial_ppt as ppt_documents
 import commercial_formats as formats
 import commercial_ecommerce as ecommerce
 import commercial_image_policy as image_policy
@@ -511,9 +512,7 @@ def submit_jobs(db, owner, body, *, upscale_method=None):
                     context["regenerate"] = True
                 if raw_context.get("generationId"):
                     context["generationId"] = text(raw_context["generationId"], "PPT 版本引用", 60)
-                if raw_context.get("reviewModel") and phase != "board":
-                    checker = provider.resolve(db, "chat", raw_context["reviewModel"], "vision")
-                    context["reviewModel"] = checker["id"]
+                # Ignore reviewModel from older drafts: a generation quote covers one image call.
         if scope == "poster" and context and db.execute("""
             SELECT 1 FROM generation_jobs WHERE owner=? AND scope='poster' AND status IN ('queued','running')
             AND json_extract(payload,'$.context.documentId')=?
@@ -709,38 +708,9 @@ def archive_image(db, store, row, payload, data, submitted):
 
 
 def review_slide(database, model, payload, data, submitted):
-    model_id = payload.get("context", {}).get("reviewModel")
-    if not model_id:
-        return data, submitted, None
-    try:
-        with database() as db:
-            checker = provider.resolve(db, "chat", model_id, "vision")
-        preview = io.BytesIO()
-        with Image.open(io.BytesIO(data)) as image:
-            image.thumbnail((1600, 900))
-            image.convert("RGB").save(preview, "JPEG", quality=89)
-        uri = "data:image/jpeg;base64," + base64.b64encode(preview.getvalue()).decode("ascii")
-        instructions = ("你是 PPT 校对员。比较给定内容和页面，只判断明确的标题、数字、术语或逻辑关系错误。"
-                        '仅输出 JSON 对象 {"ok":true,"issue":""} 或 {"ok":false,"issue":"具体错误"}。')
-        result = provider.chat(checker, [{"role": "system", "content": instructions},
-            {"role": "user", "content": [{"type": "text", "text": payload["prompt"]},
-             {"type": "image_url", "image_url": {"url": uri}}]}])
-        report = json.loads(result.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
-        if report.get("ok") is True:
-            return data, submitted, "模型已完成核对。"
-        issue = report.get("issue")
-        if report.get("ok") is not False or not isinstance(issue, str) or not issue.strip():
-            return data, submitted, "自动核对结果无法识别，请人工检查。"
-        correction = payload["prompt"][:11000] + "\n校对发现：" + issue.strip()[:500] + "。请修正该处。"
-        with database() as db:
-            permitted = check_image_policy(db, correction)
-        improved, new_size = provider.generate(model, permitted, payload["size"])
-        with Image.open(io.BytesIO(improved)) as candidate:
-            candidate.verify()
-        payload["actualPrompt"] = correction
-        return improved, new_size, "已自动重出一版，请复核：" + issue.strip()[:200]
-    except (provider.ProviderError, CommercialError, OSError, ValueError, AttributeError, Image.DecompressionBombError):
-        return data, submitted, "自动核对或修复未完成，已保留原成稿供人工检查。"
+    """Keep legacy queued jobs readable without issuing any unquoted model calls."""
+    note = "已保留原成稿，请手工核对标题、数字和术语。" if payload.get("context", {}).get("reviewModel") else None
+    return data, submitted, note
 
 
 def worker(database, store, shutdown, on_success=None):
@@ -1237,18 +1207,39 @@ def poster_advisor_result(reply):
 
 def outline_result(reply):
     try:
+        if not isinstance(reply, str):
+            raise ValueError
         cleaned = reply.strip()
         if cleaned.startswith("```"):
             cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
         pages = json.loads(cleaned)
-        if not isinstance(pages, list) or not 1 <= len(pages) <= 12:
+        if not isinstance(pages, list) or not 1 <= len(pages) <= 24:
             raise ValueError
-        return [[text(item["title"], "页标题", 120), text(item["detail"], "页内容", 2000)] for item in pages]
+        result = []
+        for item in pages:
+            if not isinstance(item, dict):
+                raise ValueError
+            title, detail = text(item["title"], "页标题", 120), text(item["detail"], "页内容", 2000)
+            if not documents._clean_text(title).strip() or not documents._clean_text(detail).strip():
+                raise ValueError
+            page = [documents._clean_text(title), documents._clean_text(detail)]
+            if "layout" in item:
+                if not isinstance(item["layout"], str) or item["layout"] not in ppt_documents.LAYOUTS:
+                    raise ValueError
+                page.append(item["layout"])
+            result.append(page)
+        return result
     except (ValueError, KeyError, TypeError, CommercialError) as error:
-        raise CommercialError(422, "语言模型返回的大纲格式无法识别，请调整需求或换模型。") from error
+        raise CommercialError(422, "AI 返回的大纲不完整或格式不正确，未保存半份结果。请减少页数或每页字数后重试，也可更换模型。") from error
 
 
-def export_ppt(db, store, owner, payload, *, image_only_pages=None, review_pages=None):
+def export_ppt(db, store, owner, payload, *, image_only_pages=None, review_pages=None, export_metadata=None):
+    if not isinstance(payload, dict):
+        raise CommercialError(400, "导出参数格式无效。")
+    if payload.get("format") == "native":
+        return ppt_documents.export_native(payload.get("slides"), payload.get("template"), metadata=export_metadata)
+    if payload.get("format") not in (None, "image", "editable"):
+        raise CommercialError(400, "请选择原生可编辑版、原图版或图片文字可编辑版。")
     pages = payload.get("slides")
     if not isinstance(pages, list) or not 1 <= len(pages) <= 24:
         raise CommercialError(400, "请选择 1 至 24 张幻灯片。")
@@ -1258,7 +1249,11 @@ def export_ppt(db, store, owner, payload, *, image_only_pages=None, review_pages
             raise CommercialError(400, "幻灯片参数格式无效。")
         asset = owned_asset(db, owner, page.get("assetId"), True)
         slides.append({"image": store.read(asset["id"]), "title": page.get("title", ""),
-                       "textboxes": page.get("textboxes", []), "preserveImage": page.get("preserveImage") is True})
+                       "textboxes": page.get("textboxes", []) if payload.get("editable") is True else [],
+                       "preserveImage": page.get("preserveImage") is True})
+    if export_metadata is not None:
+        export_metadata.update(mode="editable" if payload.get("editable") is True else "image",
+                               inputSlides=len(pages), slides=len(pages), continuedSlides=0)
     return documents.export_presentation(slides, auto=payload.get("editable") is True and payload.get("auto") is True,
                                          image_only_pages=image_only_pages, review_pages=review_pages)
 

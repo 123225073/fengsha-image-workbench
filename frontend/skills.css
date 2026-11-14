@@ -1,0 +1,27 @@
+.commercial-skills { width: min(100%, 960px); }
+.commercial-skills header .meta { margin-top: 8px; }
+#commercial-skills-status:empty, .commercial-rule-editor .status-line:empty { display: none; }
+.commercial-skills-list { display: grid; gap: 10px; min-width: 0; }
+.commercial-skill-card { min-width: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--field); }
+.commercial-skill-card > summary { padding: 15px 17px; cursor: pointer; list-style-position: inside; }
+.commercial-skill-card > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 10px; }
+.commercial-skill-card[open] > summary { border-bottom: 1px solid var(--border); }
+.commercial-skill-type { display: inline-block; margin-left: 10px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.commercial-skill-body { padding: 16px 17px; display: grid; gap: 14px; }
+.commercial-skill-body dl { display: grid; grid-template-columns: 5em minmax(0, 1fr); gap: 9px 14px; margin: 0; line-height: 1.7; }
+.commercial-skill-body dt { color: var(--muted); }
+.commercial-skill-body dd { margin: 0; overflow-wrap: anywhere; }
+.commercial-skill-body h3 { margin: 0; font-size: 15px; }
+.commercial-skill-instructions { color: var(--muted); line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+.commercial-rule-editor { border-top: 1px solid var(--border); padding-top: 16px; }
+.commercial-rule-editor textarea { resize: vertical; }
+.commercial-skill-tool-list > summary { cursor: pointer; padding-block: 8px; }
+.commercial-skill-tools { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 12px; }
+.commercial-skill-tools li { padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.commercial-skill-tools p { margin: 5px 0 0; color: var(--muted); line-height: 1.65; }
+.commercial-agent-guidance { margin: 6px 0 10px; line-height: 1.65; max-width: 82ch; }
+@media (max-width: 520px) {
+  .commercial-skill-card > summary, .commercial-skill-body { padding: 13px; }
+  .commercial-skill-body dl { grid-template-columns: 1fr; gap: 4px; }
+  .commercial-skill-body dd { margin-bottom: 10px; }
+}

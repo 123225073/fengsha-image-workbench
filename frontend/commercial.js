@@ -116,6 +116,101 @@ const workspaceCommercial = (() => {
     return `<span class="commercial-badge${good ? " commercial-good" : ""}">${escape(label)}</span>`;
   }
 
+  function skillsPanel(manage = false) {
+    return `<section class="commercial-skills stack" data-skills-manage="${manage}" aria-labelledby="commercial-skills-title">
+      <header><h2 id="commercial-skills-title">Agent 与 Skills</h2>
+      <p class="meta">${manage ? "查看内置规则，并为全站图片 Agent 或单个 Skill 添加创作要求。保存后用于后续对话。" : "查看图片 Agent 的工具和各项内置创作流程。"}</p></header>
+      <div id="commercial-skills-status" role="status">正在读取规则…</div>
+      <div class="commercial-skills-list" id="commercial-skills-list"></div></section>`;
+  }
+
+  function ruleEditor(id, name, rule) {
+    if (!rule) return "";
+    return `<form class="commercial-rule-editor stack" data-commercial="skill-rule" data-rule-id="${escape(id)}" data-revision="${rule.revision}">
+      <label class="field">补充规则
+        <textarea class="textarea" rows="4" maxlength="2000" name="rule" aria-label="${escape(name)}补充规则"
+          placeholder="例如：商品主图先确认目标平台，再按平台要求安排构图。">${escape(rule.text)}</textarea>
+      </label>
+      <div class="row"><button type="submit" class="btn btn-primary">保存补充规则</button>
+        ${button("恢复默认", "c-skills-reset", id, "ghost", rule.text ? "" : "disabled")}</div>
+      <p class="status-line" role="status"></p>
+    </form>`;
+  }
+
+  function skillCard(skill, rule) {
+    return `<details class="commercial-skill-card" name="workspace-creative-rules" data-skill-id="${escape(skill.id)}">
+      <summary><strong>${escape(skill.name)}</strong><span class="commercial-skill-type">${rule?.text ? "有补充规则" : "内置"}</span></summary>
+      <div class="commercial-skill-body"><p class="meta">${escape(skill.summary)}</p>
+      <dl><dt>需要提供</dt><dd>${escape(skill.inputs)}</dd>
+      <dt>你会得到</dt><dd>${escape(skill.output)}</dd><dt>示例需求</dt><dd>${escape(skill.example)}</dd></dl>
+      <h3>内置规则</h3><div class="commercial-skill-instructions">${escape(skill.instructions)}</div>
+      ${ruleEditor(skill.id, skill.name, rule)}</div></details>`;
+  }
+
+  async function refreshSkills() {
+    const owner = identity;
+    const list = document.querySelector("#commercial-skills-list");
+    const status = document.querySelector("#commercial-skills-status");
+    if (!list || !status || list.dataset.loading) return;
+    const manage = list.closest("[data-skills-manage]").dataset.skillsManage === "true";
+    list.dataset.loading = "true";
+    status.textContent = "正在读取规则…";
+    try {
+      const result = await api(manage ? "admin/skills" : "skills");
+      if (!list.isConnected || identity !== owner) return;
+      const {agent, skills, customRules = {}} = result;
+      const actual = skills.filter(skill => skill.id !== "auto");
+      list.innerHTML = `<details class="commercial-skill-card" name="workspace-creative-rules" data-skill-id="agent" open>
+        <summary><strong>通用图片 Agent</strong><span class="commercial-skill-type" data-tools-count="${agent.tools.length}">${agent.tools.length} 项工具${customRules.agent?.text ? " · 有补充规则" : ""}</span></summary>
+        <div class="commercial-skill-body"><p class="meta">${escape(agent.summary)}</p>
+        <h3>内置规则</h3><div class="commercial-skill-instructions">${escape(agent.instructions)}</div>
+        ${ruleEditor("agent", "通用图片 Agent", customRules.agent)}
+        <details class="commercial-skill-tool-list"><summary>可调用的工具</summary>
+        <ul class="commercial-skill-tools">${agent.tools.map(tool => `<li><strong>${escape(tool.name)}</strong>${tool.local ? '<span class="commercial-skill-type">本地处理</span>' : ""}<p>${escape(tool.description)}</p></li>`).join("")}</ul></details>
+        </div></details>${actual.map(skill => skillCard(skill, customRules[skill.id])).join("")}`;
+      status.textContent = "";
+    } catch (error) {
+      if (status.isConnected && identity === owner) {
+        status.textContent = error.message + " ";
+        status.insertAdjacentHTML("beforeend", button("重试", "c-skills-refresh", "", "secondary"));
+      }
+    } finally {
+      delete list.dataset.loading;
+    }
+  }
+
+  async function saveSkillRule(form, reset = false) {
+    const status = form.querySelector('[role="status"]');
+    const input = form.elements.rule;
+    const controls = [...form.querySelectorAll("button")];
+    const [saveButton, resetButton] = controls;
+    if (form.dataset.saving) return;
+    form.dataset.saving = "true";
+    input.readOnly = true;
+    controls.forEach(control => { control.disabled = true; });
+    status.textContent = "正在保存…";
+    try {
+      const result = await api("admin/skills/" + form.dataset.ruleId, "PUT", {
+        text: reset ? "" : input.value,
+        revision: Number(form.dataset.revision)
+      });
+      form.dataset.revision = result.revision;
+      input.value = result.text;
+      input.defaultValue = result.text;
+      const label = form.closest(".commercial-skill-card").querySelector(".commercial-skill-type");
+      const badge = label.dataset.toolsCount ? label.dataset.toolsCount + " 项工具" : "";
+      label.textContent = [badge, result.text ? "有补充规则" : (badge ? "" : "内置")].filter(Boolean).join(" · ");
+      status.textContent = result.text ? "已保存，将用于后续对话。" : "已恢复默认规则。";
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      delete form.dataset.saving;
+      input.readOnly = false;
+      saveButton.disabled = false;
+      resetButton.disabled = !input.defaultValue;
+    }
+  }
+
   function adminPanel() {
     syncOwner();
     const title = adminTabs.find(([id]) => id === admin.tab)?.[1];
@@ -428,6 +523,7 @@ const workspaceCommercial = (() => {
             <label class="commercial-agent-switch" title="勾选后主动查找；也可以直接输入「联网搜索……」" data-chat-web-search${chat.catalog.webSearch ? "" : " hidden"}><input type="checkbox" id="commercial-chat-web-search"${chat.webSearch ? " checked" : ""}${chat.request ? " disabled" : ""}>联网搜索</label>
             <div id="commercial-chat-agent-tools"${chat.agent ? "" : " hidden"}>${agentTools()}</div>
           </div>
+          <p class="meta commercial-agent-guidance" id="commercial-agent-guidance"${chat.agent ? "" : " hidden"}>${agentGuidance()}</p>
           <div id="commercial-chat-attachments">${attachmentList()}</div>
           <input type="file" id="commercial-chat-file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
           <textarea class="textarea" id="commercial-chat-text" name="text" data-ai-send placeholder="${chatPlaceholder()}" maxlength="12000" required>${escape(chat.draft)}</textarea>
@@ -452,12 +548,32 @@ const workspaceCommercial = (() => {
     const imageModels = chat.catalog.models.filter(model => model.kind === "image");
     const skills = chat.catalog.creativeSkills || [];
     const disabled = chat.request || chat.uploading ? "disabled" : "";
+    const skillsLink = account?.role === "admin"
+      ? '<a class="btn btn-ghost" href="/admin#skills" target="_blank" rel="noopener">查看 Skills</a>'
+      : '<a class="btn btn-ghost" href="/#skills">查看 Skills</a>';
     return `${skills.length ? `<label class="commercial-agent-model"><span class="sr-commercial">创作 Skill</span>
       <select class="input" id="commercial-chat-skill" ${disabled}>${skills.map(skill =>
         option(skill.id, skill.id === "auto" ? "创作 Skill · 智能推荐" : skill.name, chat.creativeSkill)).join("")}</select></label>` : ""}
     <label class="commercial-agent-model"><span class="sr-commercial">图片模型</span><select class="input" id="commercial-chat-image-model" ${disabled}>
       ${option("", "图片模型自动选择", chat.imageModelId)}${imageModels.map(model => option(model.id, `${model.name} · ${price(model.price)} 积分/张`, chat.imageModelId)).join("")}
-    </select></label>${button("上传图片", "c-chat-upload", "", "secondary", disabled)}${button("选择素材", "c-chat-assets", "", "secondary", disabled)}`;
+    </select></label>${button("上传图片", "c-chat-upload", "", "secondary", disabled)}${button("选择素材", "c-chat-assets", "", "secondary", disabled)}
+    ${skillsLink}`;
+  }
+
+  function agentGuidance() {
+    const hints = [];
+    const selected = (chat.catalog.creativeSkills || []).find(skill => skill.id === chat.creativeSkill);
+    if (selected?.id !== "auto" && selected?.summary) hints.push(selected.summary);
+    if (!chat.catalog.models.some(model => model.kind === "image")) {
+      hints.push("尚未配置图片模型。可沟通需求和使用本地工具；生图前请在后台上架图片模型。");
+    }
+    if (chat.attachmentIds.length) {
+      const model = chat.catalog.models.find(model => model.id === chat.modelId);
+      hints.push(model?.capabilities?.includes("vision")
+        ? "会查看前 3 张所选图片的预览；其余图片可按编号用于生成。"
+        : "当前语言模型不支持看图；可按你提供的说明把附件交给图片工具。需要分析图片内容时请选择支持理解图片的语言模型。");
+    }
+    return escape(hints.join(" ") || "先整理方案，确认提示词、参考图和积分后再执行。普通问题也可以直接询问。");
   }
 
   function attachmentLimit() {
@@ -698,6 +814,11 @@ const workspaceCommercial = (() => {
     // Do not replace the model selector while it has keyboard focus.
     if (tools.innerHTML !== next && !tools.contains(document.activeElement)) tools.innerHTML = next;
     for (const item of tools.querySelectorAll("select, button")) item.disabled = Boolean(chat.request) || chat.uploading;
+    const guidance = document.querySelector("#commercial-agent-guidance");
+    if (guidance) {
+      guidance.hidden = !chat.agent;
+      guidance.innerHTML = agentGuidance();
+    }
     document.querySelector("#commercial-chat-text").placeholder = chatPlaceholder();
     const attachments = document.querySelector("#commercial-chat-attachments");
     attachments.innerHTML = attachmentList();
@@ -1518,6 +1639,12 @@ const workspaceCommercial = (() => {
       adminNotice("模型已删除。");
       await refreshAdmin(true);
     }),
+    "c-skills-refresh": refreshSkills,
+    "c-skills-reset": (_, event) => {
+      const form = event.target.closest("form");
+      if (!form) return;
+      openModal("恢复默认规则？", "将清除这项已保存的补充规则。", "", "恢复默认", () => saveSkillRule(form, true));
+    },
     "c-chat-new": newChat,
     "c-chat-to-ppt": value => {
       const reply = chat.messages[Number(value)]?.text;
@@ -1581,6 +1708,7 @@ const workspaceCommercial = (() => {
   };
 
   async function submit(form) {
+    if (form.dataset.commercial === "skill-rule") return saveSkillRule(form);
     const submitters = form.querySelectorAll('button[type="submit"]');
     if ([...submitters].some(control => control.disabled)) return;
     submitters.forEach(control => { control.disabled = true; });
@@ -1631,7 +1759,10 @@ const workspaceCommercial = (() => {
       chat.notice = chat.attachmentIds.length > attachmentLimit() ? `当前模型最多可附加 ${attachmentLimit()} 张图片。` : "";
       drawChat({scroll: false});
     }
-    if (element.id === "commercial-chat-skill" && !chat.request) chat.creativeSkill = element.value;
+    if (element.id === "commercial-chat-skill" && !chat.request) {
+      chat.creativeSkill = element.value;
+      drawAgentTools();
+    }
     if (element.id === "commercial-chat-file") run(() => uploadChatFiles([...element.files]));
     if (element.id === "commercial-chat-model") {
       chat.modelId = element.value;
@@ -1726,6 +1857,8 @@ const workspaceCommercial = (() => {
   return {
     adminPanel,
     adminNavigation,
+    skillsPanel,
+    refreshSkills,
     chatView,
     searchSources,
     revealText,

@@ -6,6 +6,7 @@ import time
 import uuid
 
 from commercial_documents import MAX_PPT_ATTACHMENTS
+from commercial_ppt import PALETTES
 
 
 SCOPES = {"image", "poster", "ppt"}
@@ -36,7 +37,7 @@ TEMPLATE_OPTIONS = {
     "poster": {"preset": {"auto", "campaign", "studio", "lifestyle", "detail"}},
     "ppt": {
         "level": {"简报", "标准", "详细"},
-        "style": {"商务深蓝", "科技", "极简"},
+        "style": {"商务深蓝", "科技", "极简", *PALETTES},
     },
     "chat": {},
 }
