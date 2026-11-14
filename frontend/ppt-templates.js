@@ -6,6 +6,18 @@ const workspacePptTemplates = (() => {
     basicGray: ["#ffffff", "#202124", "#58606b"],
     basicGreen: ["#f8fbf8", "#183e32", "#26775b"],
     basicOrange: ["#fffcf7", "#49362d", "#b35e22"],
+    bay: ["#f3f7fa", "#102b45", "#136789"],
+    signal: ["#132337", "#f0f6fe", "#70d9c0"],
+    paper: ["#f7f2e8", "#362820", "#9a4938"],
+    orbit: ["#142731", "#f3f6ef", "#c6e75a"],
+    launch: ["#231614", "#fff5ed", "#f46443"],
+    classroom: ["#f0f7f5", "#173a37", "#d38a24"],
+    pitch: ["#24213e", "#f8f6ff", "#cbc7ff"],
+    impact: ["#f7f3e5", "#233d31", "#a97537"],
+    market: ["#fceeee", "#431728", "#c33465"],
+    prism: ["#11102a", "#f5f2ff", "#64f5e9"],
+    pulse: ["#153ad3", "#f8f7f1", "#e9fc49"],
+    ember: ["#1f171a", "#f6ead8", "#ef8444"],
     navy: ["#f1f5fb", "#15324b", "#2463a1"],
     olive: ["#f1f5e9", "#273827", "#527947"],
     dark: ["#172238", "#f1f7ff", "#8cc8ff"],
@@ -20,6 +32,18 @@ const workspacePptTemplates = (() => {
   };
   const groups = {
     "基础模板": [
+      ["霓光·未来科技", "下一次跃迁", "prism", "points", ["演讲", "舞台", "科技", "未来", "科技大会"], "暗紫舞台配青色光带，适合科技峰会、趋势分享和创新演讲。", "信号 → 变化 → 路线图 → 行动"],
+      ["电蓝·创意演讲", "打破惯性", "pulse", "points", ["演讲", "舞台", "公开课", "设计", "创意"], "电蓝、荧光柠檬黄与黑白摄影，适合公开演讲、创意分享和论坛开场。", "问题 → 视角 → 行动 → 收尾"],
+      ["长夜·故事分享", "越过那片山", "ember", "points", ["演讲", "个人故事", "故事", "主题分享"], "炭黑、暖白和余烬橙，适合个人故事、经验分享和叙事演讲。", "出发 → 转折 → 高潮 → 结尾"],
+      ["海湾·商务提案", "客户服务升级", "bay", "points", ["提案", "客户", "项目"], "海军蓝与冰白，斜切图文和半透明蓝带贯穿封面、方案对照和实施路线。适合提案和项目评审。", "业务挑战 → 方案与取舍 → 分阶段验证 → 决策与行动"],
+      ["信号·技术分享", "知识检索架构", "signal", "process", ["技术", "架构", "复盘"], "墨蓝封面配薄荷色信号线，内页以亮底强调分层和节点。适合架构、流程与技术复盘。", "技术问题 → 关键机制 → 方案比较 → 落地流程 → 验证与边界"],
+      ["纸本·研究纪要", "社区阅读观察", "paper", "comparison", ["研究", "答辩", "案例"], "暖白纸面、宋体大标题、朱红细线和低饱和图像。适合调研、案例和答辩。", "研究问题 → 样本与方法 → 观察与证据 → 结论与局限"],
+      ["向上·年度经营", "年度经营复盘", "orbit", "points", ["年终", "述职", "经营", "财务", "复盘"], "深墨色与青柠绿，封面用几何环形，内页突出关键指标和年度行动。", "成果 → 变化 → 项目 → 计划"],
+      ["赤焰·新品发布", "新品发布", "launch", "points", ["发布会", "产品", "新品", "演示"], "炭黑、暖白和焰橙，聚焦一件产品，用大图和分区放大卖点。", "亮点 → 场景 → 对比 → 上市"],
+      ["浅岛·企业培训", "新人上手指南", "classroom", "points", ["培训", "教案", "上手", "课堂"], "浅青底、深青字和金色路径，适合讲解、演练和回顾。", "目标 → 示范 → 练习 → 回顾"],
+      ["远山·融资路演", "增长与机会", "pitch", "points", ["路演", "投资人", "融资", "商业模式"], "午夜紫封面配渐进折面，内页以图表和精简的结构展示增长路径。", "市场 → 模式 → 增长 → 资金"],
+      ["山野·可持续行动", "可持续行动报告", "impact", "points", ["公益", "ESG", "环保", "可持续"], "森绿、暖米白和赭色，使用纪实摄影和清晰的信息层级。", "范围 → 行动 → 记录 → 承诺"],
+      ["莓红·品牌营销", "品牌活动策划", "market", "points", ["营销", "品牌", "投放", "渠道"], "莓红与浅粉搭配编辑式图文构图，适合活动策划、渠道节奏和复盘。", "洞察 → 主线 → 渠道 → 结果"],
       ["基础·商务蓝", "项目进展汇报", "basicBlue", "points", ["本期进展", "当前问题", "下一步安排"], "白底深蓝正文与蓝色强调线。统一标题、正文、页码和安全边距，优先结论与事实。", "汇报目标 → 关键进展 → 问题与对照 → 行动计划 → 待确认事项"],
       ["基础·极简灰", "简洁的管理层简报", "basicGray", "points", ["核心结论", "支撑事实", "决策事项"], "纯白底和高对比灰黑字，装饰克制。适合正式评审、投屏和打印。", "核心结论 → 关键证据 → 选项比较 → 推荐行动 → 决策事项"],
       ["基础·教育绿", "清晰的培训与分享", "basicGreen", "points", ["学习目标", "重点内容", "行动练习"], "浅白绿色底与深绿正文。知识点按阅读顺序分组，步骤页与总结页保持同一节奏。", "学习目标 → 背景与概念 → 示例与对照 → 操作步骤 → 练习与小结"],
@@ -86,126 +110,221 @@ const workspacePptTemplates = (() => {
       ["讲师工作坊", "从讲解到练习", "sun", "editorial", ["核心概念", "现场练习", "复盘"], "暖黄背景配高对比黑字，讲解与活动提示错落。计时、分组、交付要求便于投屏。", "学习目标 → 知识点 → 演示 → 练习 → 反馈和后续行动"],
     ],
   };
+  // Keep historical preset settings for existing drafts.
+  const baseName = "基础·商务蓝";
+  const designs = {
+    bay: {
+      category: "商业 PPT",
+      type: "中文封面用有分量的宋体主标题，副标题缩小一级；内页用清晰黑体或宋体标题、黑体正文，图表同一网格对齐。",
+      pages: {
+        cover: "左侧为契合主题的摄影或图形，右侧冰白留字区用斜切过渡，右列排主标题和副标题，底部用半透明海蓝带收边。",
+        agenda: "左列对齐章节号和标题，右侧可配一块斜切图面，细蓝横线强调标题。",
+        section: "章节编号与大标题集中在明亮文字区，另一侧用斜切图像保持与封面呼应。",
+        points: "冰白底、标题下用横向结论区，其余支撑要点按行分隔，海蓝只用于路径和重点。",
+        comparison: "左右等宽并列，标题对齐，用竖线分开两个方案，每栏以简短小标题开头。",
+        process: "从左到右的路线，每个节点先显示步骤名，说明放在节点下方。",
+        closing: "沿用封面的斜切图文，留白区突出确认事项，副标题列出下一步。",
+      },
+    },
+    signal: {
+      category: "技术分享 PPT",
+      type: "中文用思源黑体或等效黑体，主标题粗体，代码、接口名和技术标签用 IBM Plex Mono 风格的等宽字。",
+      inner: ["#E8F4FC", "#132337", "#179E8B"],
+      pages: {
+        cover: "整页深墨蓝，粗体主标题和副标题靠左，右半边用半透明玻璃分层和薄荷色节点表现技术结构。",
+        agenda: "纵向目录，序号列与标题列分开，用薄荷色小圆点连接各项。",
+        section: "大号薄荷色编号与白色章节标题分层，右边延续信号阶梯。",
+        points: "浅冰蓝底配深色粗体标题，左侧短薄荷线起笔，重点用有留白的图示或对齐短文说明。",
+        comparison: "两组方案左右对齐，用半透明冰蓝模块、细边界和薄荷色标明主要差异。",
+        process: "三个技术模块按从左到右连接，步骤名靠上，正文靠下，箭头方向用已确认内容决定。",
+        closing: "大标题与一句结论靠左，右边保留终端信号线和足够留白。",
+      },
+    },
+    paper: {
+      category: "学术答辩 PPT",
+      type: "主标题用思源宋体或宋体，较粗字重；小标题与正文用思源黑体或等效黑体，暖黑字。",
+      pages: {
+        cover: "暖纸底，大宋体标题和副标题靠左，右侧配合主题放一张低饱和照片，剪裁边界像折页，朱红细线串起两侧。",
+        agenda: "纵向目录像书籍目录，每行有编号与标题，两项之间用细线或留白分隔。",
+        section: "大号章节编号与宋体标题左对齐，像研究报告分节，保留右上大留白。",
+        points: "页标题靠左上，正文采用短行和细规则线，关键证据作为单独一行。",
+        comparison: "两栏像刊物并排，只有中间一根细竖线，证据和出处靠对应内容排布。",
+        process: "以纵向三步阅读，左列为关键动作，右列为简短说明，行间以浅线区分。",
+        closing: "宋体结论靠左、其下留一行研究局限或后续行动，页脚仅保留细线。",
+      },
+    },
+    orbit: {
+      category: "经营复盘",
+      type: "标题用醒目粗黑体，数字用等宽粗体。深墨配青柠几何线，浅底内页用细线分组。",
+      inner: ["#F3F6EF", "#142731", "#527729"],
+      pages: {
+        cover: "大标题靠左，环形图形占右侧，青柠只用于强调。",
+        points: "优先放可核验的关键指标，下方写统计口径、变化原因或行动。",
+        comparison: "按相同期间与口径对齐两组指标，重点变化用一处青柠色强调。",
+        process: "用按时间对齐的目标与行动轨道，突出节点与责任。",
+      },
+    },
+    launch: {
+      category: "产品发布",
+      type: "封面用特粗黑体标题和炭黑焰橙，内页留暖白。产品图强调轮廓、材质和真实使用比例。",
+      inner: ["#FFF5ED", "#231614", "#B9442D"],
+      pages: {
+        cover: "用一件和本次内容相关的主视觉占据右侧，左侧留大标题区，暖橙光只凸显轮廓。",
+        points: "一页讲一个卖点，尽量用相关产品细节或场景图说明，短文字排在另一侧。",
+        comparison: "保留相同视角和标注尺度，两列展示差别。",
+        process: "用可扫读的横向发布计划标注节点，末端强调已确认的行动。",
+      },
+    },
+    classroom: {
+      category: "企业培训",
+      type: "粗黑体标题和深青正文字，金色只标清步骤和重点。图形有纸艺质感，行距宽松。",
+      pages: {
+        cover: "大标题靠左，右侧用折纸或陶瓷质感图形提示学习路径。",
+        points: "一个学习任务或情景一个区域，说明控制在可投屏阅读的长度。",
+        comparison: "镜像分栏说明两种做法，用统一对齐和标记形成对照。",
+        process: "用清楚的序号串起动作，每个节点旁放一句说明或示范。",
+      },
+    },
+    pitch: {
+      category: "融资路演",
+      type: "大号无衬线标题，午夜紫和薰衣草色形成对比，亮底内页用纤细图形与短标题。",
+      inner: ["#F8F6FF", "#24213E", "#7562D9"],
+      pages: {
+        cover: "左侧留白装入主张，右侧以折叠立体结构形成抬升感。",
+        points: "优先摆放市场、数据或证据，标签齐头，重要事实保留来源。",
+        comparison: "用同一尺度展示不同方案或同期数据。",
+        process: "用阶梯和顺序强调增长路径，具体数值与阶段按文稿。",
+      },
+    },
+    impact: {
+      category: "公益与可持续",
+      type: "暖米白纸面和森林绿粗标题，赭色作辅助。纪实照片自然调色，压低装饰。",
+      pages: {
+        cover: "纪实摄影跨下半页，上半页留白排标题与副标题。",
+        points: "组合大幅现场图与少量说明，用细线引导阅读。",
+        comparison: "用同尺度照片、原始记录或对照数据，说明采集边界。",
+        process: "按行动顺序放清楚的节点，末端列出后续承诺。",
+      },
+    },
+    market: {
+      category: "品牌营销",
+      type: "浅粉与莓红交替，标题像杂志封面，正文和数据保持高对比。",
+      pages: {
+        cover: "左边安排大字标题，右边放契合品牌调性的静物或图形组合，保留留白。",
+        points: "用编辑式拼接将主洞察置顶，图片和要点相互说明。",
+        comparison: "两组内容保留统一的对齐规则，用深浅强调主次。",
+        process: "用横向活动排期呈现渠道与节奏，节点标签短而明确。",
+      },
+    },
+    prism: {
+      category: "舞台演讲",
+      type: "大号无衬线中文标题、高反差细节。深黑紫底，青色光线与紫色反射强调焦点。",
+      pages: {
+        cover: "标题靠左，右边用虹彩黑曜石与青色光带塑造立体主视觉。边缘保留投屏安全区。",
+        section: "用大号数字和一个短标题切换段落，背景只留简洁光痕。",
+        points: "一句结论居中放大，其余文字放到安全区的一侧，让观众一眼读完。",
+        comparison: "左右两侧以同等视觉重量对照，局部青光强调关键变化。",
+        process: "深底上用有方向的青色节点与连接线呈现路径，每站只放短标签。",
+        closing: "放大最后一句行动主张，弱化图形，保留足够留白。",
+      },
+    },
+    pulse: {
+      category: "舞台演讲",
+      type: "超粗黑体和不对称网格，电蓝搭荧光黄与纸白。黑白摄影采用大胆裁切，信息保持清楚。",
+      pages: {
+        cover: "超大主标题与一块黑白剪影构成对角线，少量荧光黄标出焦点。",
+        section: "用一组大字和实色切面翻转节奏。",
+        points: "把关键词放大成页面视觉重心，图形或结论靠边对齐，留出大块空面。",
+        comparison: "对照左右用反白和纸白做分区，同一高度放短标题，再用同规格例子说明。",
+        process: "将行动用短语排列，电蓝和荧光黄交替打点。",
+        closing: "一条行动句占主要画幅，留下简洁的电蓝签名式收尾图形。",
+      },
+    },
+    ember: {
+      category: "舞台演讲",
+      type: "采用暖白宋体大标题，深色上保持对比。纪实电影感照片配少量暖橙，图面留出不被文字覆盖的区域。",
+      pages: {
+        cover: "一张叙事照片铺满，文案对齐暖白留字区。橙光和地平线帮助引导视线。",
+        section: "让转折短句与画面形成对照，让观众注意叙事变化。",
+        points: "交替使用全页照片和纯色引文页，一页只突出一句话或一个事实。",
+        comparison: "用左右两张同色调照片建立前后对照，避免破坏原情境的文字。",
+        process: "用跨画面的细时间线串起关键节点，配简短地名或动作。",
+        closing: "用开阔远景与一句短结语收束，照片细节与暖白字保持可读对比。",
+      },
+    },
+  };
   const templates = Object.entries(groups).flatMap(([category, entries]) => entries.map(entry => {
     const [name, title, palette, layout, labels, visual, outline] = entry;
-    return {category, name, title, colors: palettes[palette], layout, labels, visual, outline, native: category === "基础模板"};
+    const family = Object.hasOwn(designs, palette) ? palette : "";
+    return {category, name, title, colors: palettes[palette], layout, labels, visual, outline, family, native: category === "基础模板"};
   }));
   const byName = new Map(templates.map(template => [template.name, template]));
-  const baseName = "基础·商务蓝";
-  const sampleSlides = [
-    {layout: "cover", label: "封面", title: "项目进展汇报", detail: "明确当前进展，集中讨论需要支持的事项。\n汇报部门 / 汇报日期"},
-    {layout: "section", label: "章节", title: "把关键问题讲清楚", detail: "这一部分，聚焦事实、判断与下一步行动。"},
-    {layout: "points", label: "要点", title: "先说结论，再给支撑事实", detail: "本期进展：已完成的工作与对应交付物。\n当前问题：影响范围、原因证据与待确认信息。\n下一步安排：具体行动、负责角色与时间节点。"},
-    {layout: "comparison", label: "对照", title: "让方案差异一目了然", detail: "方案一：优先保证范围与质量，按阶段完成交付。\n方案二：调整实施顺序，先验证核心环节再扩展。"},
-    {layout: "process", label: "流程", title: "把计划转成可以执行的步骤", detail: "明确目标\n确认范围、责任人和交付标准。\n验证方案\n用实际案例核对关键假设。\n推进交付\n记录结果并复盘遗留问题。"},
-    {layout: "closing", label: "结尾", title: "接下来，需要确认什么", detail: "确认优先级、资源安排与下次检查时间。\n讨论与行动"},
-  ];
-
-  function blend(background, accent) {
-    const channel = (hex, index) => parseInt(hex.slice(index, index + 2), 16);
-    return "#" + [1, 3, 5].map(index => Math.round(channel(background, index) * .92 + channel(accent, index) * .08).toString(16).padStart(2, "0")).join("");
+  const available = templates.filter(template => template.family);
+  for (const entry of globalThis.workspacePptReferenceCatalog || []) {
+    if (byName.has(entry.name)) continue;
+    const template = {name: entry.name, title: entry.title, family: entry.key, colors: entry.colors,
+      labels: entry.keywords, visual: entry.summary, native: true};
+    designs[entry.key] = {category: entry.category, type: entry.type, inner: entry.inner, pages: entry.pages};
+    byName.set(entry.name, template);
+    available.push(template);
   }
 
-  // 72 viewBox units equal one inch, matching the native 13⅓ × 7½ inch export.
-  // Samples follow the export's type scale, panel geometry and paragraph spacing.
-  function nativePreview(template, index = 0) {
-    const page = sampleSlides[index] || sampleSlides[0];
-    const [background, ink, accent] = template.colors;
-    const tint = blend(background, accent);
-    const rect = (x, y, width, height, fill) => `<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="${fill}"/>`;
-    const text = (value, x, y, size, color = ink, weight = 400) => `<text x="${x}" y="${y}" fill="${color}" font-size="${size}" font-weight="${weight}">${esc(value)}</text>`;
-    const wrapped = (value, width, size) => {
-      const result = [];
-      for (const paragraph of value.split("\n")) {
-        let line = "", used = 0;
-        for (const character of paragraph) {
-          const weight = /[\u2e80-\u9fff\uff01-\uff60]/.test(character) ? 1.07 : .64;
-          if (line && used + weight > width / size && (used > width / size || !"，。！？；：、）】》」』,.!?;:)]}".includes(character))) { result.push([line, false]); line = ""; used = 0; }
-          line += character; used += weight;
-        }
-        result.push([line, true]);
-      }
-      return result;
-    };
-    const lines = (values, x, y, size, paragraphSpace = 0) => {
-      let result = "";
-      for (const [value, end] of values) {
-        result += text(value, x, y, size);
-        y += size * 1.35 + (end ? paragraphSpace : 0);
-      }
-      return result;
-    };
-    let content = "";
-    if (["cover", "section", "closing"].includes(page.layout)) {
-      content = rect(57.6, 106.56, 48.96, 5.04, accent)
-        + text(page.title, 57.6, 180, 36, ink, 700)
-        + lines(wrapped(page.detail, 844.56, 22), 57.6, 274, 22)
-        + rect(57.6, 460.8, 844.56, 1.8, accent);
-    } else {
-      content = text(page.title, 46.8, 67.6, 28, ink, 700);
-      const columns = page.layout === "comparison" ? 2 : page.layout === "process" ? 3 : 1;
-      const width = (866.16 - 23.04 * (columns - 1)) / columns;
-      const size = columns > 1 ? 20 : 22;
-      let remaining = wrapped(page.detail, columns > 1 ? width - 36 : 828, size);
-      for (let n = 0; n < columns; n++) {
-        const target = Math.ceil(remaining.length / (columns - n));
-        const breaks = remaining.flatMap((line, at) => line[1] ? [at + 1] : []);
-        const split = n < columns - 1 ? breaks.reduce((best, at) => Math.abs(at - target) < Math.abs(best - target) ? at : best, breaks[0]) : remaining.length;
-        const column = remaining.slice(0, split);
-        remaining = remaining.slice(split);
-        const x = 46.8 + n * (width + 23.04);
-        if (columns > 1) {
-          content += rect(x, 118.8, width, 367.2, tint) + rect(x, 118.8, width, 3.96, accent)
-            + lines(column, x + 18, 155.36, size, 12);
-        } else {
-          content += rect(46.8, 118.8, 5.04, 367.2, accent) + lines(column, 64.8, 149.44, size, 12);
-        }
-      }
-    }
-    return `<svg class="ppt-native-preview" viewBox="0 0 960 540" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${esc(template.name)}，${esc(page.label)}版式示例" style="font-family:'Microsoft YaHei','PingFang SC',sans-serif">${rect(0, 0, 960, 540, background)}${content}${text(`${index + 1} / 6`, 838.8, 517.6, 10, ink)}</svg>`;
+  function referenceKey(name) {
+    return byName.get(name)?.family || "";
   }
-  function preview(template) {
-    if (template.native) return nativePreview(template);
-    const [background, ink, accent] = template.colors;
-    return `<span class="ppt-template-preview" data-layout="${template.layout}" aria-hidden="true"
-      style="--sample-bg:${background};--sample-ink:${ink};--sample-accent:${accent}">
-      <b>${esc(template.title)}</b><span class="ppt-template-demo">${template.labels.map(label =>
-        `<span>${esc(label)}</span>`).join("")}</span>
-    </span>`;
+
+  function availableNames() {
+    return available.map(template => template.name);
+  }
+
+  function referenceUrl(template) {
+    return `/frontend/ppt-style-references/${template.family}.jpg`;
+  }
+
+  function preview(template, defer = false) {
+    const key = template.family;
+    if (key) return `<img class="ppt-reference-image" ${defer ? "data-reference-src" : "src"}="${referenceUrl(template)}"
+      alt="${esc(template.name)}视觉参考图" decoding="async">`;
+    return `<span class="ppt-legacy-swatches" aria-hidden="true">${template.colors.map(color =>
+      `<span style="background:${color}"></span>`).join("")}</span>`;
   }
 
   function summary(name, disabled = "", label = "选择模板") {
     const template = byName.get(name) || byName.get(baseName);
     return `<section class="ppt-template-summary" aria-label="PPT 模板">
-      <div class="ppt-template-summary-head"><b>模板样式</b><span class="meta">${template.native ? "原生可编辑" : "场景风格参考"}</span></div>
+      <div class="ppt-template-summary-head"><b>分镜视觉模板</b><span class="meta">${esc(designs[template.family]?.category || "已停用的旧样式")}</span></div>
       ${preview(template)}
       <div class="ppt-template-summary-head"><b>${esc(template.name)}</b>
         <button type="button" class="btn btn-secondary" data-action="ppt-open-templates" ${disabled}>${esc(label)}</button></div>
-      <p class="meta">${template.native ? "6 种基础版式，可查看整套示例。大纲确认后可直接导出可编辑 PPT。" : "用于指导 AI 图片风格；导出原生 PPT 时采用此配色与基础版式。"}</p>
+      <p class="meta">${esc(template.visual)}</p>
     </section>`;
   }
 
   function open(name, select) {
     if (document.getElementById("ppt-template-dialog")) return;
     const opener = document.activeElement;
-    let category = "基础模板";
-    let chosen = byName.get(name) || byName.get(baseName);
-    let slideIndex = 0;
+    let chosen = byName.get(name);
+    if (!chosen?.family) chosen = available[0];
+    const categoryCounts = new Map();
+    for (const template of available) {
+      const category = designs[template.family].category;
+      categoryCounts.set(category, (categoryCounts.get(category) || 0) + 1);
+    }
     const dialog = document.createElement("dialog");
     dialog.id = "ppt-template-dialog";
     dialog.setAttribute("aria-labelledby", "ppt-template-title");
     dialog.innerHTML = `<header class="ppt-template-header">
-      <div><h2 id="ppt-template-title">选择一套清晰的 PPT 样式</h2><p class="meta">先看整套版式，再应用到当前文稿。</p></div>
+      <div><h2 id="ppt-template-title">选择分镜视觉模板</h2><p class="meta">每套一张参考图，包含封面和代表性内页。</p></div>
       <button type="button" class="btn btn-ghost ppt-template-close" aria-label="关闭模板库">×</button>
     </header>
     <div class="ppt-template-toolbar"><input type="search" class="input ppt-template-search" aria-label="搜索 PPT 模板" placeholder="搜索模板、用途或关键字">
-      <label class="ppt-template-filter">分类<select class="input" aria-label="模板分类">${Object.keys(groups).map(value => `<option value="${esc(value)}">${esc(value)}</option>`).join("")}<option value="">全部样式</option></select></label>
+      <label class="ppt-template-filter">用途<select class="input" aria-label="模板分类"><option value="">全部参考图（${available.length}）</option>${[...categoryCounts].map(([value, count]) => `<option value="${esc(value)}">${esc(value)}（${count}）</option>`).join("")}</select></label>
     </div>
     <div class="ppt-template-body">
       <section class="ppt-template-results" aria-label="模板列表"><p class="meta" data-template-count aria-live="polite"></p><div class="ppt-template-grid"></div></section>
       <section class="ppt-template-detail" aria-label="模板预览"></section>
     </div>
-    <footer class="ppt-template-footer"><p class="meta">预览中的文字为示例，不会替换你的大纲。</p><button type="button" class="btn btn-primary" data-template-apply></button></footer>`;
+    <footer class="ppt-template-footer"><p class="meta">参考图用于指导分镜的配色与排版。</p><button type="button" class="btn btn-primary" data-template-apply></button></footer>`;
     const search = dialog.querySelector(".ppt-template-search");
     const filter = dialog.querySelector(".ppt-template-filter select");
     const results = dialog.querySelector(".ppt-template-results");
@@ -213,97 +332,90 @@ const workspacePptTemplates = (() => {
     const grid = dialog.querySelector(".ppt-template-grid");
     const detail = dialog.querySelector(".ppt-template-detail");
     const apply = dialog.querySelector("[data-template-apply]");
+    const thumbnailObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting || !entry.target.isConnected) continue;
+        entry.target.src = entry.target.dataset.referenceSrc;
+        thumbnailObserver.unobserve(entry.target);
+      }
+    }, {root: results, rootMargin: "240px 0px"});
 
-    function showDetail(focusPreview = false) {
-      detail.innerHTML = `<div class="ppt-template-detail-heading"><div><h3>${esc(chosen.name)}</h3><p class="meta">${chosen.native ? "基础模板 · 16:9 · 文字与形状可编辑" : esc(chosen.category) + " · 场景风格参考"}</p></div>
-        <span class="ppt-template-badge">${chosen.name === name ? "当前使用" : "待应用"}</span></div>
-        <div class="ppt-template-main-preview" tabindex="-1">${chosen.native ? nativePreview(chosen, slideIndex) : preview(chosen)}</div>
-        ${chosen.native ? `<div class="ppt-template-page-tabs" role="group" aria-label="查看不同页面版式">${sampleSlides.map((page, index) => `<button type="button" class="ppt-template-page-tab" data-template-page="${index}" aria-label="查看${esc(page.label)}版式" aria-pressed="${index === slideIndex}">${nativePreview(chosen, index)}<span>${esc(page.label)}</span></button>`).join("")}</div>
-        <p class="ppt-template-detail-note">封面、章节、要点、对照、流程和结尾组成一套。原生导出按页面内容选择版式，长内容会自动续页；字体显示以本机安装字体为准。</p>` : `<p class="ppt-template-detail-note">这里展示配色和构图方向，AI 出图会随内容变化。需要稳定可编辑的交付时，建议选择基础模板。</p>`}
-        <p class="ppt-template-visual">${esc(chosen.visual)}</p>
+    function showDetail() {
+      if (!chosen) {
+        detail.innerHTML = '<p class="empty">没有符合条件的参考图。</p>';
+        apply.textContent = "使用模板";
+        apply.disabled = true;
+        return;
+      }
+      detail.innerHTML = `<div class="ppt-template-detail-heading"><div><h3>${esc(chosen.name)}</h3><p class="meta">${esc(designs[chosen.family].category)}</p></div>
+        <div class="ppt-template-detail-actions"><span class="ppt-template-badge">${chosen.name === name ? "当前使用" : "待应用"}</span>
+          <a class="ppt-template-original" href="${referenceUrl(chosen)}" target="_blank" rel="noopener">看原图</a></div></div>
+        <div class="ppt-template-main-preview">${preview(chosen)}</div>
+        <p class="ppt-template-visual">${esc(designs[chosen.family].type)}</p>
         <div class="ppt-template-palette" aria-label="模板配色">${chosen.colors.map(color => `<span><i style="background:${color}" aria-hidden="true"></i>${esc(color.toUpperCase())}</span>`).join("")}</div>`;
       apply.textContent = chosen.name === name ? "保留当前样式" : `使用「${chosen.name}」`;
-      if (focusPreview) detail.querySelector(".ppt-template-main-preview").focus({preventScroll: true});
+      apply.disabled = false;
     }
 
     function showTemplates() {
       const keywords = search.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-      const matches = templates.filter(template => {
-        if (category && category !== template.category) return false;
-        const searchable = [template.name, template.category, template.title, template.visual, template.outline, ...template.labels].join(" ").toLocaleLowerCase();
+      const matches = available.filter(template => {
+        const purpose = designs[template.family].category;
+        if (filter.value && filter.value !== purpose) return false;
+        const searchable = [template.name, purpose, template.title, template.visual, template.outline,
+          designs[template.family].type, ...template.labels].join(" ").toLocaleLowerCase();
         return keywords.every(word => searchable.includes(word));
       });
-      filter.value = category;
-      count.textContent = category === "基础模板" ? `${matches.length} 套基础样式 · 每套 6 种版式` : `${matches.length} 个匹配样式`;
+      if (!matches.includes(chosen)) chosen = matches[0];
+      count.textContent = `${matches.length} 套样式`;
+      thumbnailObserver.disconnect();
       grid.innerHTML = matches.map(template => `<button type="button" class="ppt-template-card"
-        data-template-name="${esc(template.name)}" aria-pressed="${String(template.name === chosen.name)}" aria-label="预览${esc(template.name)}">
-        ${preview(template)}
-        <span class="ppt-template-caption"><b>${esc(template.name)}</b><span>${template.native ? "查看整套" : "风格参考"}</span></span>
+        data-template-name="${esc(template.name)}" aria-pressed="${String(template === chosen)}" aria-label="预览${esc(template.name)}">
+        ${preview(template, true)}
+        <span class="ppt-template-caption"><b>${esc(template.name)}</b><span>${esc(designs[template.family].category)}</span></span>
         <small class="ppt-template-outline">${esc(template.title)}</small>
       </button>`).join("") || '<p class="empty">没有匹配的样式。换个关键词，或选择其他分类。</p>';
       results.scrollTop = 0;
+      grid.querySelectorAll("img[data-reference-src]").forEach(image => thumbnailObserver.observe(image));
+      showDetail();
     }
 
-    search.addEventListener("input", () => {
-      category = search.value.trim() ? "" : "基础模板";
-      showTemplates();
-    });
-    filter.addEventListener("change", () => {
-      category = filter.value;
-      showTemplates();
-    });
+    search.addEventListener("input", showTemplates);
+    filter.addEventListener("change", showTemplates);
     dialog.addEventListener("click", event => {
       const control = event.target.closest("button");
       if (!control) return;
       if (control.classList.contains("ppt-template-close")) return dialog.close();
       const choice = byName.get(control.dataset.templateName);
-      if (choice) {
+      if (choice?.family) {
         chosen = choice;
-        slideIndex = 0;
         for (const card of grid.querySelectorAll("[data-template-name]")) card.setAttribute("aria-pressed", String(card.dataset.templateName === chosen.name));
         showDetail();
-        if (window.matchMedia("(max-width: 700px)").matches) detail.scrollIntoView({block: "start"});
       }
-      if (control.hasAttribute("data-template-page")) {
-        slideIndex = Number(control.dataset.templatePage);
-        showDetail();
-        detail.querySelector(`[data-template-page="${slideIndex}"]`)?.focus({preventScroll: true});
-      }
-      if (control.hasAttribute("data-template-apply")) {
+      if (chosen && control.hasAttribute("data-template-apply")) {
         const selectedName = chosen.name;
         dialog.close();
         if (selectedName !== name) select(selectedName);
       }
     });
-    dialog.addEventListener("keydown", event => {
-      const control = event.target.closest("[data-template-page]");
-      if (!control || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-      event.preventDefault();
-      slideIndex = event.key === "Home" ? 0 : event.key === "End" ? sampleSlides.length - 1 : (slideIndex + (event.key === "ArrowRight" ? 1 : -1) + sampleSlides.length) % sampleSlides.length;
-      showDetail();
-      detail.querySelector(`[data-template-page="${slideIndex}"]`)?.focus({preventScroll: true});
-    });
     dialog.addEventListener("close", () => {
+      thumbnailObserver.disconnect();
       dialog.remove();
       if (opener?.isConnected) opener.focus({preventScroll: true});
     }, {once: true});
     document.body.append(dialog);
     showTemplates();
-    showDetail();
     dialog.showModal();
     search.focus();
   }
 
-  function visualGuide(name) {
-    const template = byName.get(name);
-    if (!template) return name || "";
-    const [background, ink, accent] = template.colors;
-    return `${template.name}（${template.category}），以 ${background} 为参考底色、${ink} 为参考文字色、${accent} 为参考强调色。${template.visual}`;
-  }
-
-  function outlineGuide(name) {
-    const template = byName.get(name);
-    return template ? `${template.name}（${template.category}）。建议叙事顺序：${template.outline}。按用户提供的事实和页数选用。` : "";
+  function visualGuide(name, layout) {
+    const template = byName.get(name) || byName.get(baseName);
+    const design = designs[template.family];
+    const [background, ink, accent] = design?.inner && layout && !["cover", "section", "closing"].includes(layout)
+      ? design.inner : template.colors;
+    return `${template.name}，底色 ${background}，文字色 ${ink}，强调色 ${accent}。${design ?
+      design.type + (design.pages[layout] || design.pages.points) : template.visual}`;
   }
 
   function nativeTemplate(name) {
@@ -312,9 +424,5 @@ const workspacePptTemplates = (() => {
     return {name: template.name, colors: [...template.colors], layout: template.native ? "points" : layouts[template.layout] || "points"};
   }
 
-  function nativeSamples() {
-    return sampleSlides.map(({layout, title, detail}) => ({layout, title, detail}));
-  }
-
-  return {summary, open, visualGuide, outlineGuide, nativeTemplate, nativeSamples};
+  return {summary, open, visualGuide, nativeTemplate, referenceKey, availableNames};
 })();

@@ -61,6 +61,8 @@
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 13px; min-height: 39px; border: 1px solid transparent; border-radius: var(--radius); font-weight: 650; }
   .btn-primary { background: var(--accent); color: var(--accent-ink); }
   .btn-primary:hover { background: color-mix(in srgb, var(--accent) 75%, white); }
+  .btn-accent-outline { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  .btn-accent-outline:hover { background: var(--accent); color: var(--accent-ink); }
   .btn-secondary { background: var(--surface); color: var(--fg); border-color: var(--border); }
   .btn-secondary:hover, .btn-secondary[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
   .btn-ghost { background: transparent; color: var(--muted); }
@@ -509,8 +511,8 @@
   .nav-mark { width: 17px; text-align: center; font-size: 18px; line-height: 1; }
   .sidebar-footer { display: grid; gap: 6px; flex: none; padding-top: 7px; border-top: 1px solid var(--border); }
   .sidebar-footer > a { color: var(--muted); }
-  .sidebar-account { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 8px 6px; border: 0; border-radius: 8px; background: transparent; color: var(--fg); text-align: left; }
-  .sidebar-account:hover { background: var(--accent-soft); }
+  .sidebar-account { display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 46px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 9px; background: var(--field); color: var(--fg); text-align: left; }
+  .sidebar-account:hover, .sidebar-account[aria-expanded="true"] { background: var(--accent-soft); }
   .sidebar-account b, .sidebar-account small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sidebar-account-copy { flex: 1; min-width: 0; }
   .sidebar-account-icon { color: var(--muted); line-height: 1; }
@@ -525,30 +527,32 @@
   .workspace .hero-body { padding: clamp(20px, 3.1vw, 48px); }
   .workspace .hero-form { margin-top: 23px; }
   .workspace .hero-form .textarea { min-height: 70px; }
-  #account-dialog { inset: auto auto 14px 14px; width: min(422px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); margin: 0; padding: 20px; box-shadow: 0 14px 56px #0009; }
-  #account-dialog::backdrop { background: #0b0c0d87; }
-  .account-header { display: flex; gap: 10px; align-items: center; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+  .account-menu { color: var(--fg); background: var(--surface); border: 1px solid var(--border); border-radius: 13px; padding: 8px; width: min(266px, calc(100vw - 24px)); max-height: min(360px, calc(100dvh - var(--account-menu-bottom, 80px) - 8px)); overflow: auto; inset: auto auto var(--account-menu-bottom, 80px) 12px; margin: 0; box-shadow: 0 12px 34px #0008; }
+  .account-menu-identity { display: flex; align-items: center; gap: 10px; padding: 7px 7px 11px; }
+  .account-menu-identity > div { min-width: 0; overflow-wrap: anywhere; }
+  .account-menu-identity strong, .account-menu-identity small { display: block; }
+  .account-menu-identity .avatar { flex-basis: 36px; width: 36px; height: 36px; }
+  .account-menu-balance { display: flex; align-items: center; gap: 6px; padding: 8px 9px; border: 1px solid var(--border); background: var(--field); border-radius: 8px; min-height: 42px; font-size: 13px; }
+  .account-menu-balance .num { margin-inline-start: auto; color: var(--accent); overflow-wrap: anywhere; }
+  .account-menu-balance:hover { background: var(--accent-soft); }
+  .account-menu-links { margin-block: 5px; }
+  .account-menu button { min-height: 40px; width: 100%; border: 0; color: var(--fg); background: transparent; text-align: start; padding: 7px 9px; border-radius: 7px; font: inherit; cursor: pointer; }
+  .account-menu button:hover { background: var(--accent-soft); }
+  .account-menu footer { padding-top: 4px; border-top: 1px solid var(--border); }
+  .account-menu footer button { color: #f5b0a8; }
+  #account-dialog, #upscale-dialog { width: min(460px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); padding: clamp(14px, 3vw, 22px); box-shadow: 0 14px 56px #0009; }
+  .account-header { display: flex; gap: 10px; align-items: center; padding-bottom: 12px; margin-bottom: 15px; border-bottom: 1px solid var(--border); }
   .account-header h2 { flex: 1; min-width: 0; font-size: 21px; overflow-wrap: anywhere; }
   .account-header .btn { min-width: 36px; min-height: 36px; padding: 0; font-size: 20px; }
-  .account-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin-block: 13px 17px; }
-  .account-tabs .btn { padding-inline: 6px; font-size: 13px; }
-  .account-tabs .btn[aria-pressed="true"] { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
   .account-section { min-width: 0; }
   .account-avatar-row { display: flex; align-items: center; gap: 12px; }
   .account-avatar-row .avatar { flex-basis: 53px; width: 53px; height: 53px; font-size: 20px; }
   .account-avatar-actions { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
   .account-avatar-actions .btn { min-height: 32px; padding: 5px 9px; font-size: 13px; }
   .account-avatar-row .meta { font-size: 12px; }
-  .account-section form > .btn { justify-self: start; }
   .account-section .status-line:empty { display: none; }
-  .account-usage-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  .account-usage-summary > div { display: grid; gap: 3px; padding: 10px; border-radius: 8px; background: var(--field); }
-  .account-usage-summary .num { font-size: 16px; overflow-wrap: anywhere; }
-  .account-ledger td { overflow-wrap: anywhere; }
-  .account-ledger td:first-child { min-width: 76px; color: var(--muted); font-size: 12px; }
-  .account-ledger td:last-child { white-space: nowrap; }
-  [data-action="account-credit-details"] { justify-self: start; }
-  .account-footer { display: flex; justify-content: flex-end; margin-top: 17px; padding-top: 9px; border-top: 1px solid var(--border); }
+  .account-login { display: flex; flex-wrap: wrap; gap: 3px 10px; font-size: 13px; overflow-wrap: anywhere; }
+  .account-form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
   .auth-layout {
     display: grid;
     grid-template-columns: minmax(0, .87fr) minmax(0, 1.13fr);
@@ -751,6 +755,26 @@
   .ppt-text-mark-image span { position: absolute; pointer-events: none; border: 2px solid var(--accent); background: #b8d87730; }
   .ppt-requirements > div { margin-top: 14px; }
   .ppt-image-route > div { margin-top: 14px; }
+  .ppt-prompt-preview { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ppt-outline-assistant { border-top: 1px solid var(--border); padding-top: 14px; scroll-margin-top: 72px; }
+  .ppt-plan-order { margin: 10px 0 0; padding-inline-start: 23px; max-height: 240px; overflow: auto; }
+  .ppt-plan-order li { padding: 4px 0; overflow-wrap: anywhere; }
+  .ppt-plan-order .meta { display: inline-block; min-width: 3.5em; }
+  .ppt-proposal-pages { max-height: 320px; overflow: auto; margin-top: 10px; }
+  .ppt-proposal-pages article { border-bottom: 1px solid var(--border); padding: 10px 0; }
+  .ppt-proposal-pages p { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ppt-outline-tools { align-self: start; min-width: 0; scroll-margin-top: 70px; }
+  .ppt-refine-jump { color: var(--accent); }
+  .ppt-refine-actions > .btn { min-height: 44px; flex: 1 1 auto; }
+  .ppt-refine-result, .ppt-outline-page[data-ppt-outline-change] { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); padding: 12px; }
+  .ppt-refine-result > strong, .ppt-outline-page[data-ppt-outline-change] > strong { color: var(--accent); }
+  .ppt-outline-page .outline-line { flex: 1 1 230px; min-width: 0; }
+  .ppt-outline-tools .ppt-discussion { max-height: 300px; }
+  @media (min-width: 971px) {
+    .ppt-outline-grid { grid-template-columns: minmax(0, 1fr) minmax(310px, 31%); grid-template-areas: "outline assistant"; }
+    .ppt-outline-grid > :first-child { grid-area: outline; }
+    .ppt-outline-tools { grid-area: assistant; position: sticky; top: 72px; max-height: calc(100dvh - 95px); overflow: auto; }
+  }
   .workspace-save-notice:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 24px; background: #46381e; color: #fff0c5; border-bottom: 1px solid #877344; }
   .workspace-save-notice span { flex: 1 1 250px; overflow-wrap: anywhere; }
   .ppt-requirements-numbers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

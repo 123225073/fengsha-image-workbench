@@ -27,7 +27,9 @@ import commercial_ecommerce as ecommerce
 import commercial_animation as animation
 import commercial_billing as billing_units
 import commercial_documents as documents
+import commercial_ppt as ppt_documents
 import commercial_ppt_brief as ppt_brief
+from commercial_ppt_catalog import CATALOG_SCRIPT
 import commercial_image_policy as image_policy
 import commercial_image_tools as image_tools
 import commercial_upscale as upscale
@@ -86,6 +88,8 @@ FRONTEND = {
     "/frontend/fengsha-hero.webp": (ROOT / "frontend" / "fengsha-hero.webp", "image/webp"),
     **{"/frontend/samples/" + asset.name: (asset, "image/webp")
        for asset in (ROOT / "frontend" / "samples").glob("*.webp")},
+    **{f"/frontend/ppt-style-references/{asset.name}": (asset, "image/jpeg")
+       for asset in commercial.PPT_STYLE_REFERENCES.values()},
 }
 
 
@@ -290,7 +294,11 @@ def validated_workspace(value):
 def update_workspace(db, user, payload):
     if payload.get("revision") != user["revision"]:
         raise ApiError(409, "同一账号的工作区已在另一页面更新，请刷新后继续。")
-    workspace = validated_workspace(payload.get("workspace"))
+    value = payload.get("workspace")
+    workspace = validated_workspace(value)
+    project_id = value.get("activeProjectId")
+    if project_id and not projects.owned_ppt_project(db, user["id"], project_id):
+        raise ApiError(409, "此 PPT 项目已删除，请刷新后继续。")
     changed = db.execute("UPDATE users SET workspace = ?, revision = revision + 1 WHERE id = ? AND revision = ?",
                          (workspace, user["id"], user["revision"]))
     if not changed.rowcount:
@@ -307,7 +315,7 @@ def image_signature(data, mime):
 
 
 class WorkspaceHandler(BaseHTTPRequestHandler):
-    server_version = "FengshaWorkspace/1.3.1"
+    server_version = "FengshaWorkspace/1.3.13"
 
     def do_GET(self):
         self.dispatch("GET")
@@ -335,6 +343,9 @@ class WorkspaceHandler(BaseHTTPRequestHandler):
             if method == "GET" and path in FRONTEND:
                 file, mime = FRONTEND[path]
                 self.send_bytes(200, file.read_bytes(), mime)
+                return
+            if method == "GET" and path == "/frontend/ppt-reference-catalog.js":
+                self.send_bytes(200, CATALOG_SCRIPT, "text/javascript; charset=utf-8")
                 return
             network_route = path in {"/api/prompts/suggest", "/api/poster/advisor", "/api/ppt/outline", "/api/ppt/discuss", "/api/ppt/revise-slide", "/api/admin/connections/discover",
                                      "/api/image-tools/extract_image_text/execute", "/api/animations/compose",
@@ -522,7 +533,9 @@ class WorkspaceHandler(BaseHTTPRequestHandler):
             self.send_bytes(200, data, mime)
             return None
         if path == "/api/projects" or path.startswith(("/api/projects/", "/api/admin/templates")):
-            return projects.route(db, method, path, user_id, self.json_body(2 * 1024 * 1024) if method in ("POST", "PUT", "DELETE") else None)
+            needs_body = method in ("POST", "PUT", "DELETE")
+            result = projects.route(db, method, path, user_id, self.json_body(2 * 1024 * 1024) if needs_body else None)
+            return {**result, **self.wallet_data(db, user_id)} if method == "DELETE" and "deleted" in result else result
         if path == "/api/poster/projects" and method in ("GET", "POST"):
             if method == "GET":
                 return {"projects": projects.poster_history(db, user_id)}
@@ -788,9 +801,9 @@ class WorkspaceHandler(BaseHTTPRequestHandler):
             brief = commercial.text(body.get("brief", ""), "汇报要求", 6000, 0)
             project_id = projects.ppt_session_scope(db, user_id, body.get("projectId", ""))
             session_id = commercial.text(body.get("sessionId", ""), "PPT 对话编号", 36, 0)
-            if session_id:
-                if not projects.PPT_SESSION_ID.fullmatch(session_id):
-                    raise ApiError(400, "PPT 对话编号不正确。")
+            if session_id and not projects.PPT_SESSION_ID.fullmatch(session_id):
+                raise ApiError(400, "PPT 对话编号不正确。")
+            if project_id or session_id:
                 session_id = f"{project_id}:{session_id}"
             return self.language_task(db, user_id, body, json.dumps(fields, ensure_ascii=False),
                 "你是中文演示文稿设计师。仅返回一段可直接交给生图模型的完整提示词，4500 字内。"
@@ -809,25 +822,45 @@ class WorkspaceHandler(BaseHTTPRequestHandler):
             transcript = '' if history is not None else commercial.text(body.get("transcript", ""), "沟通记录", 4000, 0)
             turn = commercial.text(body.get("message", ""), "本次补充", 3000, 0)
             discussion = path.endswith("/discuss")
-            if discussion and (replacement := web_search.ppt_replacement_topic(turn)):
+            current_outline = body.get("currentOutline")
+            target_page = body.get("targetPage")
+            confirmed = ""
+            if current_outline is not None:
+                validated = commercial.outline_result(json.dumps(current_outline, ensure_ascii=False), max_pages=ppt_documents.MAX_OUTPUT_SLIDES)
+                confirmed = "\n当前逐页大纲（按数组顺序，从第 1 页开始）：\n" + json.dumps(validated, ensure_ascii=False)
+            scope_note = ""
+            if target_page is not None:
+                if not confirmed or type(target_page) is not int or not 1 <= target_page <= len(validated):
+                    raise ApiError(400, "所选大纲页无效，请重新选择。")
+                scope_note = f"\n本轮仅允许修改原大纲第 {target_page} 页。其他页面仅作为上下文。"
+                scope_note += "单页沟通仅修改本页，增删或移动请使用整稿沟通。"
+            if discussion and not confirmed and (replacement := web_search.ppt_replacement_topic(turn)):
                 brief, transcript = replacement, ""
                 body = {**body, "history": [], "searchQuestions": [], "evidenceTurnIds": []}
             project_id = projects.ppt_session_scope(db, user_id, body.get("projectId", ""))
             session_id = commercial.text(body.get("sessionId", ""), "PPT 对话编号", 36, 0)
-            if session_id:
-                if not projects.PPT_SESSION_ID.fullmatch(session_id):
-                    raise ApiError(400, "PPT 对话编号不正确。")
+            if session_id and not projects.PPT_SESSION_ID.fullmatch(session_id):
+                raise ApiError(400, "PPT 对话编号不正确。")
+            if project_id or session_id:
                 session_id = f"{project_id}:{session_id}"
             research = self.ppt_research(db, user_id, body, turn if discussion else "", brief=brief,
                                          outline=not discussion, session_id=session_id)
             template_guide = commercial.text(body.get("templateGuide", ""), "模板结构参考", 300, 0)
+            template_asset = body.get("templateAssetId", "")
+            if template_asset and template_asset not in asset_ids:
+                raise ApiError(400, "请从已添加的资料中选择参考模板。")
             requirements = ppt_brief.requirements_text(body.get("requirements"))
             materials = []
             warnings = []
+            include_template_agenda = False
             budget = max(0, 11000 - len(brief) - len(transcript) - len(turn)) // max(1, len(asset_ids))
             for key in dict.fromkeys(asset_ids):
                 asset = commercial.owned_asset(db, user_id, key)
                 name = asset["name"][:72]
+                if key == template_asset:
+                    if not asset["name"].lower().endswith(".pptx"):
+                        raise ApiError(400, "请选择 PPTX 文件作为结构参考模板。")
+                    name = "用户指定的参考模板 · " + name
                 try:
                     data = self.server.assets.read(asset["id"])
                     material = (documents.recognize_image_text(data) if asset["mime"].startswith("image/")
@@ -836,23 +869,31 @@ class WorkspaceHandler(BaseHTTPRequestHandler):
                     warnings.append(f"{name}：{error}")
                     continue
                 if material.strip():
+                    if key == template_asset and ppt_brief.template_has_agenda(material):
+                        include_template_agenda = True
                     if len(material) + len(name) + 5 > budget:
                         warnings.append(f"{name}：本轮只使用资料节选。")
                     materials.append(f"【{name}】\n{material[:max(0, budget - len(name) - 5)]}")
                 else:
                     warnings.append(f"{name}：未提取到文字。")
             material = "\n\n".join(materials)
-            if not (brief or material or turn or transcript):
+            if include_template_agenda:
+                template_guide += " 用户指定的参考模板含目录页，使用本次汇报内容填写目录。"
+            if not (brief or material or turn or transcript or confirmed):
                 raise ApiError(400, "请提供汇报需求或包含可提取文字的附件。")
             model_input = (f"详细度：{str(body.get('level',''))[:20]}\n风格：{str(body.get('style',''))[:30]}\n"
-                           f"模板结构参考：{template_guide}\n用户填写的汇报要求：\n{requirements}\n需求：{brief}\n沟通记录：\n{transcript}\n本轮补充：{turn}\n资料：\n{material}")
+                           f"模板结构参考：{template_guide}\n用户填写的汇报要求：\n{requirements}\n需求：{brief}\n沟通记录：\n{transcript}\n资料：\n{material}{confirmed}{scope_note}\n本轮补充：{turn}")
             if discussion:
                 return self.language_task(db, user_id, body, model_input,
-                    ppt_brief.DISCUSSION_PROMPT, PPT_DISCUSSION, "reply", lambda reply: reply.strip(), warnings=warnings,
+                    ppt_brief.REFINE_DISCUSSION_PROMPT if confirmed else ppt_brief.DISCUSSION_PROMPT,
+                    PPT_DISCUSSION, "reply", lambda reply: reply.strip(), warnings=warnings,
                     session_id=session_id, **research)
             return self.language_task(db, user_id, body, model_input,
-                ppt_brief.OUTLINE_PROMPT,
-                "PPT 大纲", "outline", commercial.outline_result, max_output=12288, warnings=warnings,
+                ppt_brief.REFINE_OUTLINE_PROMPT if confirmed else ppt_brief.OUTLINE_PROMPT,
+                "PPT 大纲", "changes" if confirmed else "outline",
+                (lambda reply: commercial.outline_changes(reply, len(validated), target_page=target_page)) if confirmed else
+                (lambda reply: commercial.outline_result(reply, include_agenda=include_template_agenda)),
+                max_output=12288, warnings=warnings,
                 session_id=session_id, **research)
         if method == "POST" and path == "/api/ppt/export":
             payload = self.json_body()

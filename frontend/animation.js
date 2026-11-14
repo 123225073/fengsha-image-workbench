@@ -18,6 +18,7 @@
   function clearResult(current) {
     current.request?.abort();
     current.request = null;
+    current.started = null;
     if (current.url) URL.revokeObjectURL(current.url);
     current.url = "";
     current.blob = null;
@@ -104,7 +105,7 @@
         <div class="animation-output">
           <div class="animation-preview" aria-live="polite">
             ${current.url ? `<img src="${esc(current.url)}" alt="拼接动图预览">` :
-    `<p class="meta">${current.request ? "正在拼接…" : "生成后在此预览"}</p>`}
+    `<p class="meta">${current.request ? activeJobProgress("正在拼接", current.started) : "生成后在此预览"}</p>`}
           </div>
           <p class="animation-error" role="alert" ${current.error ? "" : "hidden"}>${esc(current.error)}</p>
           <div class="row animation-export">
@@ -172,6 +173,7 @@
     clearResult(current);
     const request = new AbortController();
     current.request = request;
+    current.started = Math.floor(Date.now() / 1000);
     update();
     try {
       const response = await fetch("/api/animations/compose", {method: "POST", signal: request.signal,
@@ -191,6 +193,7 @@
     } finally {
       if (current.request === request) {
         current.request = null;
+        current.started = null;
         if (current === getDraft()) update();
       }
     }

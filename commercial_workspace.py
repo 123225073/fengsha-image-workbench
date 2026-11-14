@@ -25,6 +25,7 @@ from PIL import Image, ImageDraw, ImageOps
 
 import commercial_documents as documents
 import commercial_ppt as ppt_documents
+from commercial_ppt_catalog import STYLE_REFERENCES as PPT_STYLE_REFERENCES
 import commercial_formats as formats
 import commercial_ecommerce as ecommerce
 import commercial_image_policy as image_policy
@@ -33,6 +34,7 @@ import commercial_upscale as upscale
 import commercial_web_search as web_search
 import commercial_context as chat_context
 import commercial_memory as chat_memory
+from commercial_projects import owned_ppt_project
 import commercial_research as research_tools
 from commercial_billing import CREDIT_ADJUSTMENT_MAX
 
@@ -139,6 +141,8 @@ def setup(db, data):
     for name in ("token_rates", "token_usage", "upstream_id", "asset_ids", "web_search", "memory_scope", "memory_calls"):
         if name not in turn_columns:
             db.execute(f"ALTER TABLE chat_turns ADD COLUMN {name} TEXT")
+    if "discard_reply" not in turn_columns:
+        db.execute("ALTER TABLE chat_turns ADD COLUMN discard_reply INTEGER NOT NULL DEFAULT 0")
     chat_memory.setup(db)
 
 
@@ -452,6 +456,9 @@ def submit_jobs(db, owner, body, *, upscale_method=None):
         if output and output.get("method") == "sheet" and any(int(dim) > formats.GIF_MAX_EDGE for dim in size.split("x")):
             raise CommercialError(400, f"分镜合成的单帧尺寸最大为 {formats.GIF_MAX_EDGE} 像素。")
         raw_context = item.get("context")
+        style_reference = raw_context.get("pptStyleReference") if scope == "ppt" and isinstance(raw_context, dict) else None
+        if style_reference is not None and (not isinstance(style_reference, str) or style_reference not in PPT_STYLE_REFERENCES):
+            raise CommercialError(400, "未知的 PPT 视觉参考图。")
         poster_shot = raw_context.get("posterShot") if scope == "poster" and isinstance(raw_context, dict) else None
         if poster_shot is not None:
             if not isinstance(poster_shot, str) or poster_shot not in ecommerce.SHOT_RULES:
@@ -465,10 +472,11 @@ def submit_jobs(db, owner, body, *, upscale_method=None):
             model = {"name": name, "id": identifier, "model": identifier, "price": 0}
         else:
             check_image_policy(db, effective_prompt)
-            capability = image_capability(image_ids, regions or mask)
+            references = [*image_ids, style_reference] if style_reference else image_ids
+            capability = image_capability(references, regions or mask)
             model = provider.resolve(db, "image", item.get("modelId"), capability)
             check_generation_output(model, output)
-            check_image_count(model, image_ids)
+            check_image_count(model, references)
         if type(item.get("unitPrice")) is not int or item["unitPrice"] != model["price"]:
             raise CommercialError(409, "模型价格已更新，请重新查看报价。")
         context = {}
@@ -505,9 +513,15 @@ def submit_jobs(db, owner, body, *, upscale_method=None):
                 context["posterCopy"] = saved_copy
             if scope == "ppt":
                 index, phase = raw_context.get("index"), raw_context.get("phase")
-                if type(index) is not int or not 0 <= index < 12 or phase not in ("board", "final", "redo"):
+                if type(index) is not int or not 0 <= index < ppt_documents.MAX_OUTPUT_SLIDES or phase not in ("board", "final", "redo"):
                     raise CommercialError(400, "幻灯片上下文无效。")
                 context.update(index=index, phase=phase)
+                if project_id := raw_context.get("projectId"):
+                    if project_id != context["documentId"] or not owned_ppt_project(db, owner, project_id, active=True):
+                        raise CommercialError(409, "PPT 项目已删除或归档，请重新打开活动项目后再生成。")
+                    context["projectId"] = project_id
+                if style_reference:
+                    context["pptStyleReference"] = style_reference
                 if raw_context.get("regenerate") is True:
                     context["regenerate"] = True
                 if raw_context.get("generationId"):
@@ -812,16 +826,25 @@ def run_job(database, store, row, on_success):
 
 
 def run_generation(database, store, row, payload):
+    context = payload.get("context", {})
+    style_key = context.get("pptStyleReference")
+    style_reference = PPT_STYLE_REFERENCES.get(style_key) if style_key and row["scope"] == "ppt" else None
+    reference_ids = [*payload["imageIds"], style_reference.name] if style_reference else payload["imageIds"]
     with database() as db:
         regions = payload.get("regions")
         prompt = check_image_policy(db, payload.get("actualPrompt", payload["prompt"]))
-        model = provider.resolve(db, "image", row["model_id"], image_capability(payload["imageIds"], regions or payload["mask"]))
+        model = provider.resolve(db, "image", row["model_id"], image_capability(reference_ids, regions or payload["mask"]))
         if model["model"] != row["provider_model"]:
             raise CommercialError(409, "模型配置已变更，请重新提交。")
-        check_image_count(model, payload["imageIds"])
+        check_image_count(model, reference_ids)
         check_generation_output(model, payload.get("output"))
         images = [owned_asset(db, row["owner"], key, True, True) for key in payload["imageIds"]]
     media = [(item["name"], item["mime"], store.read(item["id"])) for item in images]
+    if style_reference:
+        try:
+            media.append((style_reference.name, "image/jpeg", style_reference.read_bytes()))
+        except OSError as error:
+            raise CommercialError(500, "PPT 视觉参考图无法读取，请重新安装模板文件。") from error
     try:
         mask = (prepare_region_edit(media, payload["imageIds"], regions) if regions
                 else mask_image(media[0][2], payload["mask"]) if payload["mask"] else None)
@@ -832,7 +855,6 @@ def run_generation(database, store, row, payload):
     derived = output and output.get("method", "native") != "native"
     request_prompt, request_size = formats.raster_request(prompt, payload["size"], output) if derived else (prompt, payload["size"])
     options = {"output": output} if output and not derived else {}
-    context = payload.get("context", {})
     full_result = derived or context.get("regenerate") or context.get("phase") == "redo"
     data, submitted = provider.generate(model, request_prompt, request_size, media, mask, receipt=receipt,
                                         on_preview=None if full_result else lambda preview: _publish_job_preview(row["id"], preview), **options)
@@ -1013,7 +1035,18 @@ def finish_chat(db, owner, turn_id, reply, status, receipt=None, label="AI 对�
     db.execute("""UPDATE chat_turns SET reply=?,status=?,price=?,token_usage=?,
                   upstream_id=COALESCE(?,upstream_id) WHERE id=?""",
                (reply, status, charged, json.dumps(usage) if usage else None, upstream_id, turn_id))
-    return billing_view(db.execute("SELECT * FROM chat_turns WHERE id=?", (turn_id,)).fetchone())
+    result = billing_view(db.execute("SELECT * FROM chat_turns WHERE id=?", (turn_id,)).fetchone())
+    if row["discard_reply"]:
+        redact_ppt_conversation(db, owner, row["conversation"])
+    return result
+
+
+def redact_ppt_conversation(db, owner, identifier):
+    db.execute("""UPDATE conversations SET title='已删除 PPT 项目' WHERE id=? AND owner=?""", (identifier, owner))
+    # Keep blank turn rows so an SQLite rowid never reuses a settlement reference.
+    db.execute("""UPDATE chat_turns SET discard_reply=1, user_text='', reply='', asset_ids=NULL, web_search=NULL
+        WHERE conversation=? AND EXISTS (SELECT 1 FROM conversations WHERE id=? AND owner=?)""", (identifier, identifier, owner))
+    db.execute("DELETE FROM conversation_memory WHERE conversation=? AND owner=?", (identifier, owner))
 
 
 def resolve_unknown_chat(db, turn, owner, usage=None):
@@ -1051,7 +1084,13 @@ def chat_task(database, owner, body, message, system, label, parse=None, *, max_
     memory_scope = chat_memory.scope_key(owner, identifier, family, session_id, body.get('researchId', '') if family == 'ppt' else '')
     with database() as db:
         db.execute("BEGIN IMMEDIATE")
+        project_id = body.get("projectId", "") if family == 'ppt' else ""
+        if project_id and not owned_ppt_project(db, owner, project_id, active=True):
+            raise CommercialError(409, "PPT 项目已删除或归档。")
         db.execute("INSERT OR IGNORE INTO conversations VALUES(?,?,?,?)", (identifier, owner, label, now()))
+        if project_id:
+            db.execute("INSERT OR IGNORE INTO creative_project_chats(project_id,conversation_id) VALUES(?,?)",
+                       (project_id, identifier))
         extra_input = (web_search.MAX_CONTEXT_BYTES if research else 0) + (2048 if image_uri else 0)
         if visual_references:
             extra_input += min(len(visual_references[1]), ecommerce.MAX_VISION_REFERENCES) * ecommerce.VISION_TOKEN_BUDGET
@@ -1205,7 +1244,7 @@ def poster_advisor_result(reply):
         raise CommercialError(422, "AI 返回的海报方案无法识别，请重新整理或更换模型。") from error
 
 
-def outline_result(reply):
+def outline_result(reply, *, max_pages=24, include_agenda=False):
     try:
         if not isinstance(reply, str):
             raise ValueError
@@ -1213,24 +1252,94 @@ def outline_result(reply):
         if cleaned.startswith("```"):
             cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
         pages = json.loads(cleaned)
-        if not isinstance(pages, list) or not 1 <= len(pages) <= 24:
+        if not isinstance(pages, list) or not 1 <= len(pages) <= max_pages:
             raise ValueError
         result = []
         for item in pages:
             if not isinstance(item, dict):
                 raise ValueError
-            title, detail = text(item["title"], "页标题", 120), text(item["detail"], "页内容", 2000)
-            if not documents._clean_text(title).strip() or not documents._clean_text(detail).strip():
+            title, detail = text(item["title"], "页标题", 120), text(item["detail"], "页内容", 2000, 0)
+            if not documents._clean_text(title).strip():
                 raise ValueError
             page = [documents._clean_text(title), documents._clean_text(detail)]
             if "layout" in item:
                 if not isinstance(item["layout"], str) or item["layout"] not in ppt_documents.LAYOUTS:
                     raise ValueError
                 page.append(item["layout"])
+            if item.get("chapter"):
+                if len(page) == 2:
+                    page.append("points")
+                page.append(text(item["chapter"], "章节名", 60))
             result.append(page)
+        if include_agenda:
+            agenda = next((page for page in result if (len(page) > 2 and page[2] == "agenda") or
+                           page[0].strip().casefold() in {"目录", "内容提要", "议程", "汇报提纲", "agenda", "table of contents"}), None)
+            if agenda:
+                agenda[2:3] = ["agenda"]
+            else:
+                has_cover = (len(result[0]) < 3 or result[0][2] == "cover")
+                headings = [page[0] for page in result[int(has_cover):] if len(page) < 3 or page[2] != "closing"]
+                if headings:
+                    if len(result) >= max_pages:
+                        raise ValueError
+                    detail = "\n".join(f"{index}. {title}" for index, title in enumerate(headings[:12], 1))
+                    result.insert(int(has_cover), ["目录", detail, "agenda"])
         return result
     except (ValueError, KeyError, TypeError, CommercialError) as error:
         raise CommercialError(422, "AI 返回的大纲不完整或格式不正确，未保存半份结果。请减少页数或每页字数后重试，也可更换模型。") from error
+
+
+def outline_changes(reply, page_count, *, target_page=None):
+    """Validate edits against original page numbers and keep the rest out of the model response."""
+    try:
+        cleaned = reply.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
+        changes = json.loads(cleaned)
+        if not isinstance(changes, list) or len(changes) > 2 * ppt_documents.MAX_OUTPUT_SLIDES:
+            raise ValueError
+        affected = set()
+        total = page_count
+        result = []
+        for change in changes:
+            op = change["op"]
+            if op not in ("update", "insert", "delete", "move"):
+                raise ValueError
+            if target_page is not None and (op != "update" or change.get("page") != target_page):
+                raise CommercialError(422, "AI 提议改动其他页面。跨页调整或增删请切换到「整稿沟通」。")
+            item = {"op": op}
+            if op != "insert":
+                page = change["page"]
+                if type(page) is not int or not 1 <= page <= page_count or page in affected:
+                    raise ValueError
+                affected.add(page)
+                item["page"] = page
+            if op in ("insert", "move"):
+                after = change["after"]
+                if type(after) is not int or not 0 <= after <= page_count or after == item.get("page"):
+                    raise ValueError
+                item["after"] = after
+            if op in ("insert", "update"):
+                if not isinstance(change["slide"], dict) or "layout" not in change["slide"]:
+                    raise ValueError
+                item["slide"] = outline_result(json.dumps([change["slide"]], ensure_ascii=False))[0]
+            total += (op == "insert") - (op == "delete")
+            result.append(item)
+        if not 1 <= total <= ppt_documents.MAX_OUTPUT_SLIDES:
+            raise ValueError
+        moves = {item["page"]: item["after"] for item in result if item["op"] == "move"}
+        for page in moves:
+            visited = set()
+            while page in moves:
+                if page in visited:
+                    raise ValueError
+                visited.add(page)
+                page = moves[page]
+        return result
+    except CommercialError:
+        raise
+    except (AttributeError, ValueError, KeyError, TypeError) as error:
+        raise CommercialError(422, "AI 返回的页面改动无效，当前大纲已保留。请指定需要调整的页码后重试。") from error
 
 
 def export_ppt(db, store, owner, payload, *, image_only_pages=None, review_pages=None, export_metadata=None):
@@ -1241,8 +1350,8 @@ def export_ppt(db, store, owner, payload, *, image_only_pages=None, review_pages
     if payload.get("format") not in (None, "image", "editable"):
         raise CommercialError(400, "请选择原生可编辑版、原图版或图片文字可编辑版。")
     pages = payload.get("slides")
-    if not isinstance(pages, list) or not 1 <= len(pages) <= 24:
-        raise CommercialError(400, "请选择 1 至 24 张幻灯片。")
+    if not isinstance(pages, list) or not 1 <= len(pages) <= documents.MAX_EXPORT_SLIDES:
+        raise CommercialError(400, f"请选择 1 至 {documents.MAX_EXPORT_SLIDES} 张幻灯片。")
     slides = []
     for page in pages:
         if not isinstance(page, dict):

@@ -29,7 +29,8 @@ def body_text(deck):
 
 class NativePowerPointTests(unittest.TestCase):
     def test_every_basic_template_and_layout_reopens_with_native_shapes(self):
-        pages = [{"title": "项目汇报", "detail": "目标已确认\n依据资料整理\n下一步行动", "layout": layout}
+        pages = [{"title": "项目汇报", "detail": "目标已确认\n依据资料整理\n下一步行动", "layout": layout,
+                  **({"number": "02"} if layout == "section" else {})}
                  for layout in sorted(native.LAYOUTS)]
         for template in native.PALETTES:
             with self.subTest(template=template):
@@ -40,11 +41,13 @@ class NativePowerPointTests(unittest.TestCase):
                     self.assertFalse(any(path.startswith("ppt/media/") for path in archive.namelist()))
                 deck = Presentation(BytesIO(content))
                 self.assertEqual(len(deck.slides), len(pages))
-                self.assertEqual(stats, {"mode": "native", "inputSlides": 6, "slides": 6, "continuedSlides": 0})
+                self.assertEqual(stats, {"mode": "native", "inputSlides": len(pages), "slides": len(pages), "continuedSlides": 0})
                 for slide, source in zip(deck.slides, pages):
                     self.assertTrue(any(shape.name == "可编辑标题" and shape.has_text_frame for shape in slide.shapes))
                     self.assertFalse(any(shape.shape_type == MSO_SHAPE_TYPE.PICTURE for shape in slide.shapes))
                     self.assertIn(source["detail"], slide.notes_slide.notes_text_frame.text)
+                    if source["layout"] == "section":
+                        self.assertEqual(next(shape.text for shape in slide.shapes if shape.name == "章节序号"), "02")
                     for shape in slide.shapes:
                         self.assertGreaterEqual(shape.left, 0)
                         self.assertGreaterEqual(shape.top, 0)
@@ -53,6 +56,15 @@ class NativePowerPointTests(unittest.TestCase):
                         if shape.has_text_frame and shape.name.startswith("可编辑"):
                             self.assertTrue(all(run.font.size.pt >= 18 for paragraph in shape.text_frame.paragraphs
                                                 for run in paragraph.runs))
+
+    def test_complete_decks_have_different_native_geometry(self):
+        slides = [{"title": "项目计划", "layout": "cover"}, {"title": "目录", "layout": "agenda",
+                   "detail": "01  目标\n02  方法\n结尾  讨论"}]
+        bay, signal, paper = [Presentation(BytesIO(native.export_native(slides, {"name": name})))
+                              for name in native.FAMILIES]
+        for deck, shape in zip((bay, signal, paper), ("商务侧带", "技术顶栏", "纪要侧线")):
+            self.assertIn(shape, {item.name for item in deck.slides[0].shapes})
+        self.assertEqual(sum(shape.name.startswith("内容区域") for shape in bay.slides[1].shapes), 2)
 
     def test_long_chinese_and_mixed_text_continues_without_loss_or_tiny_fonts(self):
         detail = ("关键指标同比提升，范围与证据待确认。English API=200 / ¥1,234.50，\n" * 33)[:2000]
@@ -100,7 +112,7 @@ class NativePowerPointTests(unittest.TestCase):
         invalid = [None, [], [None], [{"title": " "}], [{"title": 3}],
                    [{"title": "标题", "detail": ["text"]}], [{"title": "标题", "detail": "字" * 2001}],
                    [{"title": "标题", "layout": "unknown"}], [{"title": "字" * 121}],
-                   [{"title": "标题"}] * 25]
+                   [{"title": "标题"}] * 61]
         for pages in invalid:
             with self.subTest(pages=str(pages)[:75]), self.assertRaises(documents.DocumentError):
                 native.export_native(pages)
@@ -218,6 +230,38 @@ class OutlineValidationTests(unittest.TestCase):
         result = workspace.outline_result(json.dumps(pages))
         self.assertEqual(len(result), 24)
         self.assertTrue(all(page[2] == "points" for page in result))
+
+    def test_outline_adjustment_accepts_only_valid_page_operations(self):
+        slide = {"title": "结束", "detail": "感谢聆听", "layout": "closing"}
+        changes = [{"op": "update", "page": 1, "slide": {**slide, "layout": "cover"}},
+                   {"op": "move", "page": 2, "after": 3},
+                   {"op": "insert", "after": 3, "slide": slide}]
+        result = workspace.outline_changes(json.dumps(changes), 3)
+        self.assertEqual(result[2]["slide"], ["结束", "感谢聆听", "closing"])
+        self.assertEqual(len(workspace.outline_changes(json.dumps(changes[:1]), 3, target_page=1)), 1)
+        with self.assertRaisesRegex(workspace.CommercialError, "整稿沟通"):
+            workspace.outline_changes(json.dumps(changes), 3, target_page=1)
+        self.assertEqual(workspace.outline_changes("[]", 60), [])
+        invalid = [[{"op": "delete", "page": 4}], changes + [changes[0]],
+                   [{"op": "delete", "page": 1}, {"op": "delete", "page": 2}, {"op": "delete", "page": 3}],
+                   [{"op": "move", "page": 2, "after": 2}], [{"op": "insert", "after": True, "slide": slide}],
+                   [{"op": "move", "page": 1, "after": 2}, {"op": "move", "page": 2, "after": 1}]]
+        for operations in invalid:
+            with self.subTest(operations=operations), self.assertRaises(workspace.CommercialError):
+                workspace.outline_changes(json.dumps(operations), 3)
+
+    def test_agenda_from_reference_uses_current_deck_and_avoids_duplicate(self):
+        pages = [{"title": "汇报", "detail": "", "layout": "cover"},
+                 {"title": "项目进展", "detail": "试点完成", "layout": "points"}]
+        self.assertEqual(workspace.outline_result(json.dumps(pages), include_agenda=True)[1],
+                         ["目录", "1. 项目进展", "agenda"])
+        pages.insert(1, {"title": "Agenda", "detail": "当前议题"})
+        result = workspace.outline_result(json.dumps(pages), include_agenda=True)
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result[1][2], "agenda")
+        full = [pages[0], *({"title": f"议题 {i}", "detail": "正文"} for i in range(23))]
+        with self.assertRaises(workspace.CommercialError):
+            workspace.outline_result(json.dumps(full), include_agenda=True)
 
 
 if __name__ == "__main__":

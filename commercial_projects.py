@@ -203,6 +203,16 @@ def active_project(db, owner, identifier):
     return row
 
 
+def owned_ppt_project(db, owner, identifier, *, active=False):
+    if not isinstance(identifier, str) or not ASSET_ID.fullmatch(identifier):
+        return False
+    query = """SELECT 1 FROM creative_projects WHERE id=? AND owner=? AND scope!='poster'
+        AND (scope='ppt' OR json_type(workspace,'$.workspaces.ppt')='object')"""
+    if active:
+        query += " AND archived=0 AND deleted=0"
+    return db.execute(query, (identifier, owner)).fetchone() is not None
+
+
 def ppt_session_scope(db, owner, project_id):
     if not isinstance(project_id, str) or (project_id and not ASSET_ID.fullmatch(project_id)):
         raise ProjectError(400, "PPT 项目编号不正确。")
@@ -354,6 +364,72 @@ def _update_project(db, owner, identifier, body):
     if not changed.rowcount:
         raise ProjectError(409, "项目已在其他页面更新，请重新打开后继续。")
     return {"project": _project_view(_project(db, owner, identifier), True)}
+
+
+def _detach_workspace_ppt(workspace, identifier):
+    if workspace.get("activeProjectId") != identifier:
+        return False
+    independent = workspace.get("standaloneDrafts", {}).pop("ppt", {})
+    uploads = workspace.setdefault("uploads", {})
+    for slot in SCOPE_UPLOADS["ppt"]:
+        uploads.pop(slot, None)
+    uploads.update({slot: entry for slot, entry in independent.get("uploads", {}).items()
+                    if slot in SCOPE_UPLOADS["ppt"]})
+    workspace.update(activeProjectId="", ppt=independent.get("document", {}))
+    return True
+
+
+def _delete_ppt_project(db, owner, identifier, revision):
+    from commercial_workspace import finish_job, redact_ppt_conversation, workbench_conversation
+
+    project = _project(db, owner, identifier)
+    if project["scope"] == "poster" or "ppt" not in _project_workspaces(project):
+        raise ProjectError(404, "未找到 PPT 项目。")
+    if type(revision) is not int or revision != project["revision"]:
+        raise ProjectError(409, "项目已在其他页面更新，请刷新项目列表后重新确认。")
+
+    account = db.execute("SELECT workspace,revision FROM users WHERE id=?", (owner,)).fetchone()
+    workspace = json.loads(account["workspace"])
+    documents = [_project_workspaces(project).get("ppt", {}).get("document", {})]
+    sessions = db.execute("SELECT id,workspace FROM ppt_workspace_sessions WHERE owner=? AND project_id=?",
+                          (owner, identifier)).fetchall()
+    documents.extend(json.loads(item["workspace"]).get("document", {}) for item in sessions)
+    if workspace.get("activeProjectId") == identifier:
+        documents.append(workspace.get("ppt", {}))
+    session_ids = {item["id"] for item in sessions}
+    session_ids.update(value for document in documents for field in ("sessionId", "draftId")
+                       if isinstance(value := document.get(field), str) and PPT_SESSION_ID.fullmatch(value))
+    conversation_ids = {
+        workbench_conversation(owner, label, f"{identifier}:{session_id}")
+        for session_id in session_ids | {""}
+        for label in ("PPT 需求沟通", "PPT 大纲", "PPT 单页提示词")
+    }
+    conversation_ids.update(item["conversation_id"] for item in db.execute("""SELECT c.id AS conversation_id
+        FROM creative_project_chats p JOIN conversations c ON c.id=p.conversation_id
+        WHERE p.project_id=? AND c.owner=? AND c.id LIKE 'workbench-%'""", (identifier, owner)))
+    db.execute("DELETE FROM creative_project_chats WHERE project_id=?", (identifier,))
+    for conversation in conversation_ids:
+        redact_ppt_conversation(db, owner, conversation)
+    db.execute("DELETE FROM ppt_workspace_sessions WHERE owner=? AND project_id=?", (owner, identifier))
+    db.execute("DELETE FROM creative_project_assets WHERE project_id=?", (identifier,))
+
+    job_scope = """owner=? AND scope='ppt' AND
+        (json_extract(payload,'$.context.projectId')=? OR json_extract(payload,'$.context.documentId')=?)"""
+    job_params = (owner, identifier, identifier)
+    jobs = db.execute("SELECT * FROM generation_jobs WHERE " + job_scope + " AND status='queued'", job_params).fetchall()
+    for job in jobs:
+        finish_job(db, job, "cancelled")
+    db.execute("UPDATE generation_jobs SET hidden_at=? WHERE " + job_scope + " AND hidden_at IS NULL",
+               (_now(), *job_params))
+
+    previous_revision = account["revision"]
+    revision = previous_revision
+    if _detach_workspace_ppt(workspace, identifier):
+        db.execute("UPDATE users SET workspace=?,revision=revision+1 WHERE id=?",
+                   (json.dumps(workspace, ensure_ascii=False, separators=(",", ":")), owner))
+        revision += 1
+    db.execute("DELETE FROM creative_projects WHERE id=? AND owner=?", (identifier, owner))
+    return {"deleted": identifier, "workspaceRevision": revision, "previousWorkspaceRevision": previous_revision}
 
 
 def poster_history(db, owner):
@@ -521,4 +597,7 @@ def route(db, method, path, owner, body=None):
             return _update_project(db, owner, match[1], body)
         if match and method == "DELETE":
             return _update_project(db, owner, match[1], {**body, "deleted": True})
+        permanent = re.fullmatch(r"/api/projects/([a-f0-9]{32})/permanent", path)
+        if permanent and method == "DELETE":
+            return _delete_ppt_project(db, owner, permanent[1], body.get("revision"))
     raise ProjectError(404, "项目或模板接口不存在。")

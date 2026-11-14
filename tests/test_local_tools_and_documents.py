@@ -1,7 +1,10 @@
 """Real local file/image operations on synthetic data; no accounts, models or network."""
 
 from io import BytesIO
+import json
+from pathlib import Path
 import sqlite3
+import tempfile
 import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
@@ -296,6 +299,79 @@ class ProjectIsolationTests(unittest.TestCase):
         reopened = projects.route(self.db, "GET", path, 17)["project"]
         self.assertEqual(reopened["workspaces"]["ppt"]["document"]["brief"], "新需求")
         self.assertEqual(reopened["revision"], saved["revision"])
+
+
+class ProjectDeletionTests(unittest.TestCase):
+    def test_delete_all_states_preserves_other_data_and_cancels_queued_jobs(self):
+        import commercial_workspace as commercial
+        import workspace_server as server
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(server, "DATA", Path(directory)), \
+                patch.object(server, "DATABASE", Path(directory) / "workspace.sqlite3"):
+            server.setup()
+            with server.database() as db:
+                db.execute("""INSERT INTO users(id,email,name,password,points,created,revision)
+                    VALUES(1,'first@example.invalid','First','fixture',10,0,5),
+                          (2,'second@example.invalid','Second','fixture',10,0,3)""")
+                first = projects.route(db, "POST", "/api/projects", 1, {"name": "待删项目"})["project"]
+                other = projects.route(db, "POST", "/api/projects", 2, {"name": "其他人项目"})["project"]
+                identifier = first["id"]
+                path = "/api/projects/" + identifier
+                session = "11111111-1111-1111-1111-111111111111"
+                archive = {"archive":{"id":session, "title":"历史", "document": {"brief": "保存的需求"}}}
+                projects.ppt_session(db, 1, identifier, archive)
+                projects.ppt_session(db, 1, "", archive)
+                asset = "a" * 32
+                db.execute("INSERT INTO assets VALUES(?,1,'独立素材','image/png',10,0)", (asset,))
+                db.execute("INSERT INTO creative_project_assets VALUES (?,?)", (identifier, asset))
+                user_state = {"activeProjectId":identifier, "ppt":{"brief":"冲突草稿"},
+                              "uploads":{"image":asset, "ppt":"old"}, "standaloneDrafts":{"ppt":{"document":{"brief":"独立草稿"}, "uploads":{"ppt":asset}}}}
+                db.execute("UPDATE users SET workspace=? WHERE id=1", (json.dumps(user_state),))
+                context = json.dumps({"size":"1024x576", "context":{"documentId":identifier}})
+                for job, status in (("queued-job", "queued"), ("running-job", "running")):
+                    db.execute("""INSERT INTO generation_jobs(id,owner,request_id,scope,label,model_id,model_name,
+                        provider_model,price,payload,status,created,updated)
+                        VALUES(?,1,?,'ppt','分镜','m','测试','m',5,?,?,0,0)""", (job, job, context, status))
+                conversation = commercial.workbench_conversation(1, "PPT 需求沟通", identifier + ":" + session)
+                db.execute("INSERT INTO conversations VALUES(?,1,'旧标题',0)", (conversation,))
+                db.execute("""INSERT INTO chat_turns(conversation,request_id,user_text,reply,model_name,price,status,created)
+                    VALUES(?,'reply','项目内容','已有回复','测试',0,'running',0)""", (conversation,))
+                with self.assertRaises(projects.ProjectError):
+                    projects.route(db, "DELETE", path + "/permanent", 2, {"revision": 1})
+                with self.assertRaises(projects.ProjectError) as stale:
+                    projects.route(db, "DELETE", path + "/permanent", 1, {"revision": 0})
+                self.assertEqual(stale.exception.status, 409)
+                self.assertTrue(projects.owned_ppt_project(db, 1, identifier))
+                self.assertEqual(db.execute("SELECT status FROM generation_jobs WHERE id='queued-job'").fetchone()[0], "queued")
+                removed = projects.route(db, "DELETE", path + "/permanent", 1, {"revision": 1})
+                self.assertEqual(removed, {"deleted":identifier, "workspaceRevision":6, "previousWorkspaceRevision":5})
+                self.assertFalse(projects.owned_ppt_project(db, 1, identifier))
+                self.assertTrue(projects.owned_ppt_project(db, 2, other["id"]))
+                restored = db.execute("SELECT workspace,points,revision FROM users WHERE id=1").fetchone()
+                document = json.loads(restored["workspace"])
+                self.assertEqual(document["activeProjectId"], "")
+                self.assertEqual(document["ppt"]["brief"], "独立草稿")
+                self.assertEqual(document["uploads"], {"image":asset, "ppt":asset})
+                self.assertEqual(restored["points"], 15)
+                self.assertEqual(restored["revision"], 6)
+                self.assertEqual(db.execute("SELECT id FROM assets").fetchone()[0], asset)
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM creative_project_assets").fetchone()[0], 0)
+                self.assertEqual(db.execute("SELECT project_id FROM ppt_workspace_sessions").fetchone()[0], "")
+                jobs = {r["id"]: (r["status"], bool(r["hidden_at"])) for r in db.execute("SELECT * FROM generation_jobs")}
+                self.assertEqual(jobs, {"queued-job":("cancelled", True), "running-job":("running", True)})
+                turn = db.execute("SELECT * FROM chat_turns WHERE conversation=?", (conversation,)).fetchone()
+                self.assertEqual(turn["user_text"], "")
+                commercial.finish_chat(db, 1, turn["id"], "晚到的结果", "succeeded")
+                turn = db.execute("SELECT * FROM chat_turns WHERE conversation=?", (conversation,)).fetchone()
+                self.assertEqual((turn["status"], turn["reply"]), ("succeeded", ""))
+                with self.assertRaises(server.ApiError):
+                    server.update_workspace(db, {**dict(restored), "id":1}, {"revision":6,"workspace":user_state})
+                for status in ("archived", "deleted"):
+                    archived = projects.route(db, "POST", "/api/projects", 1, {"name": status})["project"]
+                    archived_path = "/api/projects/" + archived["id"]
+                    projects.route(db, "PUT", archived_path, 1, {"revision":1, status:True})
+                    projects.route(db, "DELETE", archived_path + "/permanent", 1, {"revision": 2})
+                    self.assertFalse(projects.owned_ppt_project(db, 1, archived["id"]))
 
 
 if __name__ == "__main__":

@@ -80,7 +80,7 @@ function initialState() {
     standaloneDrafts: {},
     image: { tool: "mask", prompt: "", ratio: "1:1", resolution: "source", width: 1024, height: 1024, candidates: [], outputs: {}, adopted: "", selection: null, text: "" },
     poster: { title: "", subtitle: "", date: "", variant: 0, selected: "main", exports: ["main", "square", "wide"] },
-    ppt: { brief: "", requirements: {}, level: "简报", style: "基础·商务蓝", stage: 0, maxStage: 0, active: 0, outline: [], boards: [], pages: [], history: {}, textboxes: {},
+    ppt: { brief: "", requirements: {}, level: "简报", style: "海湾·商务提案", stage: 0, maxStage: 0, active: 0, outline: [], boards: [], pages: [], history: {}, textboxes: {},
       discussion: [], discussionDraft: "", sourceWarnings: [], boardHistory: {}, pageEdits: {}, resolution: "1920x1080" }
   };
 }
@@ -258,7 +258,7 @@ function updateWallet(result) {
   state.points = result.points;
   state.ledger = result.ledger;
   if (result.spent !== undefined) state.spent = result.spent;
-  updateAccountUsage();
+  document.querySelector("#account-menu-balance").textContent = points(available());
 }
 async function refreshFiles() {
   const owner = identity;
@@ -622,6 +622,8 @@ function generationGallery() {
 function updateGenerationGallery() {
   const gallery = content.querySelector("[data-generation-gallery]");
   if (gallery) {
+    const activity = content.querySelector("[data-generation-activity]");
+    if (activity) activity.innerHTML = generationActivity(studioFormat());
     gallery.innerHTML = generationGallery();
     updateStudioAssets();
   }
@@ -697,7 +699,7 @@ function generationView() {
       ${imagePromptFields(draft, "画面描述", "描述主体、场景、构图或风格")}
       ${imageParameterPanel(draft, "generate", model?.sizes || [], count)}`}
       </div>
-      <div class="studio-control-footer">${button(pending.has("image") ? "正在提交…" : format === "still" ? "查看费用并生成" : "查看费用并生成 " + format.toUpperCase(), format === "still" ? "generate-image" : "generate-native-image", "", "primary", pending.has("image") ? "disabled" : "")}</div>
+      <div class="studio-control-footer"><div data-generation-activity>${generationActivity(format)}</div>${button(pending.has("image") ? "正在提交…" : format === "still" ? "查看费用并生成" : "查看费用并生成 " + format.toUpperCase(), format === "still" ? "generate-image" : "generate-native-image", "", "primary", pending.has("image") ? "disabled" : "")}</div>
     </section>
     <section class="studio-gallery" aria-labelledby="generation-gallery-title">
       ${format !== "still" ? nativeStudioIntro(format) : ""}
@@ -1015,7 +1017,7 @@ const slide = actualSlide;
 function stepPptSlide(direction, focusArrow = true) {
   const ppt = state.ppt;
   const index = ppt.active + direction;
-  if (ppt.stage < 2 || index < 0 || index >= ppt.outline.length) return;
+  if (ppt.stage < 2 || index < 0 || index >= pptPlan(ppt).length) return;
   ppt.active = index;
   save();
   render();
@@ -1051,6 +1053,7 @@ function researchModeField(field, mode, locked) {
 function pptView() {
   const ppt = state.ppt;
   normalizePptDraft(ppt);
+  const plan = pptPlan(ppt);
   const busy = pending.has("ppt") || scopeInProgress("ppt");
   const locked = busy ? "disabled" : "";
   const submitLocked = pending.has("ppt") ? "disabled" : "";
@@ -1065,14 +1068,18 @@ function pptView() {
       <label class="field">汇报内容<textarea class="textarea" data-field="ppt-brief" ${ppt.discussion.length ? "" : 'data-ai-send="ppt-discuss"'} maxlength="6000" ${locked} placeholder="描述主题、听众和汇报目标。也可以只上传资料。">${esc(ppt.brief)}</textarea></label>
       <div class="stack upload-zone" data-drop-target="ppt"><div class="row">${button("添加资料", "file", "ppt", "secondary", files.length === pptSlots.length ? "disabled" : locked)}<span class="meta">${files.length} / ${pptSlots.length} 份</span>${button("使用项目汇报示例", "ppt-sample", "", "ghost", locked)}</div>
       <p class="meta">支持拖入或多选 PDF、Word、Excel、PPTX、图片和文本。单份最多 12 MB。</p>
-      ${files.length ? `<div class="ppt-source-list" aria-label="已添加资料">${files.map(key => `<div class="row">${ui.file[key].url ? uploadArtwork(ui.file[key], "upload:" + key, true, "upload-thumb") : ""}<span>${esc(ui.file[key].name)}</span>${button("移除附件", "detach-file", key, "ghost", locked)}</div>`).join("")}</div>` : ""}</div>
+      ${files.length ? `<div class="ppt-source-list" aria-label="已添加资料">${files.map(key => `<div class="row">${ui.file[key].url ? uploadArtwork(ui.file[key], "upload:" + key, true, "upload-thumb") : ""}<span>${esc(ui.file[key].name)}</span>${button("移除附件", "detach-file", key, "ghost", locked)}</div>`).join("")}</div>` : ""}
+      ${files.some(key => /\.pptx$/i.test(ui.file[key].name)) ? `<label class="field">参考模板（选填）
+        <select class="input" data-field="ppt-template-asset" ${locked}><option value="">仅作为内容资料</option>
+          ${files.filter(key => /\.pptx$/i.test(ui.file[key].name)).map(key => `<option value="${esc(ui.file[key].id)}" ${ppt.templateAssetId === ui.file[key].id ? "selected" : ""}>${esc(ui.file[key].name)}</option>`).join("")}
+        </select></label>` : ""}</div>
       ${ppt.sourceWarnings.length ? `<details><summary>资料读取提示（${ppt.sourceWarnings.length}）</summary><ul>${ppt.sourceWarnings.map(warning => `<li>${esc(warning)}</li>`).join("")}</ul></details>` : ""}
       ${ppt.discussion.length ? `<div class="ppt-discussion" aria-label="需求沟通记录">${ppt.discussion.map((turn, index) =>
         `<p class="ppt-turn"><b>你</b>${esc(turn?.question)}</p><article class="ppt-turn"><b>AI</b>${pptReplyText(turn?.reply)}${turn?.webSearch ? workspaceCommercial.searchSources(turn.webSearch, "ppt-turn-" + index, index === ppt.discussion.length - 1) : ""}</article>`).join("")}</div>
         <label class="field">继续补充<textarea class="textarea" data-field="ppt-discussion" data-ai-send="ppt-discuss" maxlength="3000" ${locked} placeholder="回答 AI 的问题，或补充新的要求">${esc(ppt.discussionDraft)}</textarea></label>` : ""}
       ${pptStreamPreview()}
-      <div class="row ppt-intake-actions">${button(pending.get("ppt") === "discuss" ? "正在沟通…" : ppt.discussion.length ? "发送补充" : "开始需求沟通", "ppt-discuss", "", ppt.discussion.length ? "secondary" : "primary", locked + " " + aiSendShortcut)}
-      ${button("联网搜索并发送", "ppt-search-send", "", "secondary", locked)}
+      <div class="row ppt-intake-actions">${button(pending.get("ppt") === "discuss" ? "正在沟通…" : ppt.discussion.length ? "发送补充" : "开始需求沟通", "ppt-discuss", "", "primary", locked + " " + aiSendShortcut)}
+      ${button("联网搜索并发送", "ppt-search-send", "", "accent-outline", locked)}
       ${button(pending.get("ppt") === "outline" ? "正在生成大纲…" : "需求已确认，生成大纲", "ppt-outline", "", "primary", ppt.discussion.length ? locked : "disabled")}</div>
       <p class="meta">需求沟通和大纲按语言模型实际 Token 结算。</p></div>
       <aside class="card stack ppt-intake-options">
@@ -1087,44 +1094,92 @@ function pptView() {
       <label class="field">详细程度<select class="input" data-field="ppt-level">${["简报","标准","详细"].map(value => `<option ${ppt.level === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
       ${workspacePptTemplates.summary(ppt.style, locked)}
       ${button("已有内容，手动整理大纲", "ppt-manual-outline", "", "secondary", locked)}
-      <p class="meta">已有大纲可以直接排版导出，不必先调用模型。</p>
+      <p class="meta">已有大纲可以直接填写，确认后进入分镜出图。</p>
       ${modelSelect("ppt-language-model", "chat", "text", ppt.languageModel, "语言模型")}
       ${researchModeField("ppt-search-mode", ppt.searchMode, locked)}
       <p class="meta">「联网搜索并发送」会为本轮重新查找公开资料。回复可展开查看来源。</p></aside></div>`;
   } else if (ppt.stage === 1) {
-    body = `<div class="work-grid"><div class="card stack"><h2>逐页确认大纲</h2>
-      <p class="meta">这里的正文会直接进入可编辑 PPT。每页聚焦一个观点，长内容导出时会自动续页。</p>
-      ${ppt.outline.map(([title, detail, layout], index) => `<div class="stack ppt-outline-page"><label class="outline-line"><span class="num">${index + 1}</span><input class="input" aria-label="第 ${index + 1} 页标题" data-field="ppt-title" data-index="${index}" maxlength="120" value="${esc(title)}" ${locked}></label><textarea class="textarea" aria-label="第 ${index + 1} 页内容" data-field="ppt-detail" data-index="${index}" maxlength="2000" ${locked}>${esc(detail)}</textarea>
-      <label class="field">第 ${index + 1} 页版式<select class="input" data-field="ppt-layout" data-index="${index}" ${locked}>${Object.entries(pptLayouts).map(([key,label]) => `<option value="${key}" ${(layout || (index === 0 ? "cover" : "points")) === key ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>`).join("")}</div>
-      <aside class="card stack"><h3>样式与导出</h3>
-      ${workspacePptTemplates.summary(ppt.style, locked, "更换模板")}
-      <section class="ppt-native-export stack"><h3>直接制作可编辑 PPT</h3><p class="meta">按已确认大纲和基础模板排版，标题、正文和形状可在 WPS / PowerPoint 中编辑。本地导出不调用模型。</p>
-      ${button(ui.pptExport?.native ? "正在制作…" : "导出原生可编辑 PPTX", "ppt-export-native", "", "primary", ui.pptExport ? "disabled" : locked)}
-      ${button("重新整理大纲", "ppt-manual-outline", "", "ghost", locked)}${pptExportStatus(ppt)}</section>
-      <details class="ppt-image-route"><summary>制作图片式页面</summary><div class="stack"><p class="meta">需要 AI 插画或复杂视觉设计时，可继续生成页面图。</p>${scopeStatus("ppt")}
+    const hasBoards = ppt.boards.some(Boolean);
+    const boardLabel = hasBoards ? "确认大纲，补齐分镜图" : "确认大纲，生成分镜图";
+    const proposalRows = pptProposalRows(ppt);
+    const preview = proposalRows.length > 0;
+    const planned = preview ? pptPlan({...ppt, outline: ppt.refineProposal.outline}) : plan;
+    const pageLocked = preview ? "disabled" : locked;
+    const textLocked = preview ? "readonly" : locked;
+    const scopedPage = ui.pptRefineTarget?.ppt === ppt ? ui.pptRefineTarget.page : null;
+    const refineStatus = ui.pptRefineStatus?.ppt === ppt ? ui.pptRefineStatus.message : "";
+    const turns = (ppt.refineTurns || []).map((turn, index) => ({turn, index}))
+      .filter(({turn}) => (turn.page ?? null) === scopedPage);
+    const outlineRows = preview ? proposalRows : ppt.outline.map((slide, index) => ({slide, index, change: ""}));
+    body = `<div class="work-grid ppt-outline-grid"><div class="card stack"><div class="row-between"><h2>逐页确认大纲</h2>
+      <div class="row">${button("导出原生可编辑 PPTX", "ppt-export-native", "", "secondary", ui.pptExport ? "disabled" : pageLocked)}
+      ${button("先调整页面", "ppt-review-outline", "", "secondary", pageLocked)}
+        ${button(boardLabel, "ppt-board", "", "primary", pageLocked)}</div></div>
+      ${live.imageSubmissions.has("ppt") ? activeJobProgress("正在提交分镜任务", live.imageSubmissions.get("ppt")) : ""}
+      <p class="meta">确认后按所选模板逐页生成分镜图，提交前可查看费用。</p>
+      <button type="button" class="btn btn-secondary ppt-refine-jump" data-action="ppt-jump-refine">对照大纲与 AI 沟通 ↓</button>
+      <div class="row">
+        <label class="row"><input type="checkbox" data-field="ppt-agenda" ${(ppt.agenda ?? ppt.structure) ? "checked" : ""} ${pageLocked}> 添加目录页</label>
+        <label class="row"><input type="checkbox" data-field="ppt-structure" ${ppt.structure ? "checked" : ""} ${pageLocked}> 添加编号章节页</label>
+      </div>
+      ${ppt.structure || ppt.agenda ? `<details open><summary>预定页序（${planned.length} 页）</summary><ol class="ppt-plan-order">${planned.map(page => `<li><span class="meta">${esc(pptLayouts[page.layout])}</span> ${esc(page.number ? page.number + "  " : "")}${esc(page.title)}</li>`).join("")}</ol></details>` : ""}
+      ${ppt.structure ? '<p class="meta">需要自定分组时，在某页填入章节标题。留空时按已有章节页分组，或自动均分为最多四章。</p>' : ""}
+      ${outlineRows.map(({slide: [title, detail, layout, chapter], index, change}) => `<div class="stack ppt-outline-page" ${change ? "data-ppt-outline-change" : ""}>
+      ${change ? `<strong class="meta">待${change} · ${change === "删除" ? "原" : ""}第 ${index + 1} 页</strong>` : ""}
+      <div class="row-between"><label class="outline-line"><span class="num">${index + 1}</span><input class="input" aria-label="第 ${index + 1} 页标题" data-field="ppt-title" data-index="${index}" maxlength="120" value="${esc(title)}" ${textLocked}></label>
+        ${preview ? "" : button("和 AI 改本页", "ppt-refine-page", index + 1, "secondary", pageLocked)}</div>
+      <textarea class="textarea" aria-label="第 ${index + 1} 页内容" data-field="ppt-detail" data-index="${index}" maxlength="2000" ${textLocked}>${esc(detail)}</textarea>
+      <label class="field">第 ${index + 1} 页版式<select class="input" data-field="ppt-layout" data-index="${index}" ${pageLocked}>${Object.entries(pptLayouts).map(([key,label]) => `<option value="${key}" ${(layout || (index === 0 ? "cover" : "points")) === key ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+      ${ppt.structure ? `<label class="field">从本页开启新章节（选填）<input class="input" data-field="ppt-chapter" data-index="${index}" maxlength="60" value="${esc(chapter || "")}" ${pageLocked}></label>` : ""}</div>`).join("")}
+      ${button(boardLabel, "ppt-board", "", "primary", pageLocked)}</div>
+      <aside class="card stack ppt-outline-tools">
+      <section class="stack" aria-label="分镜生成设置">
+        ${workspacePptTemplates.summary(ppt.style, locked, "更换模板")}
+        ${modelSelect("ppt-model", "image", "generate", ppt.model)}
+        ${pptResolutionControl(ppt)}
+      </section>
+      <section id="ppt-outline-assistant" class="ppt-outline-assistant stack"><h3>对照大纲与 AI 沟通</h3>
+      <div class="row-between"><strong>${scopedPage ? `第 ${scopedPage} 页 · ${esc(ppt.outline[scopedPage - 1]?.[0])}` : "整稿沟通"}</strong>
+        ${scopedPage ? button("切换到整稿", "ppt-refine-page", "", "secondary", locked) : '<span class="meta">页码按左侧大纲</span>'}</div>
+      ${turns.length ? `<div class="ppt-discussion" aria-label="大纲修改对话">${turns.map(({turn,index}) => `<p class="ppt-turn"><b>你</b>${esc(turn.question)}</p><article class="ppt-turn"><b>AI</b>${pptReplyText(turn.reply)}${turn.webSearch ? workspaceCommercial.searchSources(turn.webSearch, "ppt-refine-" + index) : ""}</article>`).join("")}</div>` : ""}
+      <label class="field">修改要求<textarea class="textarea" data-field="ppt-refine" data-ai-send="ppt-refine-discuss" maxlength="3000" ${locked} placeholder="${scopedPage ? "例如：把本页改成一句简短的结束语。" : "例如：精简第 3 页，在第 8 页后插入一页案例。"}">${esc(scopedPage ? ui.pptRefineTarget.draft || "" : ppt.refineDraft || "")}</textarea></label>
+      ${modelSelect("ppt-language-model", "chat", "text", ppt.languageModel, "语言模型")}
+      <div class="row ppt-refine-actions">${button(pending.get("ppt") === "discuss" ? "AI 回复中…" : "发送给 AI", "ppt-refine-discuss", "", turns.length ? "accent-outline" : "primary", locked + " " + aiSendShortcut)}${button(pending.get("ppt") === "outline" ? "正在生成调整稿…" : "生成调整稿", "ppt-refine-generate", "", turns.length ? "primary" : "accent-outline", locked)}</div>
+      <p class="meta">先讨论修改意见。生成的调整稿需确认应用，按语言模型实际用量计费。</p>${pptStreamPreview()}
+      ${refineStatus ? `<p class="notice" role="status" tabindex="-1" data-ppt-refine-status>${esc(refineStatus)}</p>` : ""}
+      ${preview ? `<div class="stack ppt-refine-result" tabindex="-1" data-ppt-refine-result><strong role="status">调整稿已就绪 · ${proposalRows.filter(row => row.change).length} 处改动</strong>
+        <div class="row ppt-refine-actions">${button("应用调整稿", "ppt-refine-apply", "", "primary", locked)}${button("放弃调整稿", "ppt-refine-discard", "", "ghost", locked)}</div>
+        <details open><summary>查看改动（应用后共 ${ppt.refineProposal.outline.length} 页）</summary><div class="ppt-proposal-pages">${pptProposalPreview(proposalRows)}</div></details></div>` : ""}
       ${ppt.outlineWebSearch ? workspaceCommercial.searchSources(ppt.outlineWebSearch, "ppt-outline", true) : ""}
-      ${modelSelect("ppt-model", "image", "generate", ppt.model)}
-      ${pptResolutionControl(ppt)}
-      <p class="meta">分镜就是完整页面图，满意可直接用来导出。</p>
-      ${button(pending.has("ppt") ? "正在提交…" : "确认大纲，生成分镜", "ppt-board", "", "primary", submitLocked)}</div></details></aside></div>`;
+      ${pptExportStatus(ppt)}
+      ${button("手动重新整理大纲", "ppt-manual-outline", "", "ghost", locked)}</section></aside></div>`;
   } else {
     const ready = ppt.stage === 3;
+    const editLocked = canEditStoryboard(ppt) ? "" : "disabled";
     const asset = ui.files.find(file => file.id === (ready ? ppt.pages : ppt.boards)[ppt.active]);
     const edit = ppt.pageEdits?.[ppt.active] || {};
     const versions = (ready ? ppt.history : ppt.boardHistory)?.[ppt.active] || [];
     const pageVersions = [...new Set([asset?.id, ...(Array.isArray(versions) ? [...versions].reverse() : []),
       ready ? ppt.boards[ppt.active] : null])].filter(visualExists);
     const pageJobMessage = pptPageJobMessage(ppt.active, asset?.id);
-    const complete = ppt.outline.every((_, index) => visualExists(ppt.boards[index]));
-    const thumbnails = ppt.outline.map(([title], index) => `<button class="slide-tile" data-media-select data-action="ppt-slide" data-value="${index}" aria-pressed="${active(ppt.active === index)}">${slide(index)}<span class="meta">第 ${index + 1} 页 · ${esc(title)}</span></button>`).join("");
-    body = `<div class="work-grid ppt-review-grid"><div class="card stack ppt-review"><h2>${ready ? "成稿预览" : "分镜总览"}</h2>
+    const boardCount = plan.filter((_, index) => visualExists(ppt.boards[index])).length;
+    const complete = boardCount === plan.length;
+    const imageComplete = plan.every((_, index) => visualExists(ppt.pages[index]));
+    const thumbnails = plan.map(({title, layout}, index) => `<button class="slide-tile" data-media-select data-action="ppt-slide" data-value="${index}" aria-pressed="${active(ppt.active === index)}">${slide(index)}<span class="meta">第 ${index + 1} 页 · ${esc(pptLayouts[layout])} · ${esc(title)}</span></button>`).join("");
+    body = `<div class="work-grid ppt-review-grid"><div class="card stack ppt-review"><div class="row-between">
+      <h2>${ready ? "成稿预览" : "分镜总览"}</h2>
+      ${ready ? "" : `<div class="row" role="group" aria-label="分镜页面管理">
+        ${button("＋ 添加页面", "ppt-add-page", "", "secondary", plan.length >= 60 ? "disabled" : editLocked)}
+        ${button("编辑本页", "ppt-edit-page", "", "secondary", editLocked)}
+        ${button("删除本页", "ppt-remove-page", "", "ghost", plan.length <= 1 ? "disabled" : editLocked)}
+      </div>`}</div>
       <div class="ppt-preview" tabindex="-1" aria-label="幻灯片预览">
         <div class="slide-large">${slide(ppt.active, true)}</div>
         ${button("‹", "ppt-slide-step", "-1", "secondary", 'aria-label="上一页" ' + (ppt.active === 0 ? "disabled" : ""))}
-        ${button("›", "ppt-slide-step", "1", "secondary", 'aria-label="下一页" ' + (ppt.active >= ppt.outline.length - 1 ? "disabled" : ""))}
+        ${button("›", "ppt-slide-step", "1", "secondary", 'aria-label="下一页" ' + (ppt.active >= plan.length - 1 ? "disabled" : ""))}
       </div>
-      <div class="row-between ppt-preview-caption"><span class="meta">第 ${ppt.active + 1} / ${ppt.outline.length} 页</span>
-        <span class="meta">点击图面放大，左右方向键翻页</span></div>
+      <div class="row-between ppt-preview-caption"><span class="meta">第 ${ppt.active + 1} / ${plan.length} 页</span>
+        <span class="meta">${asset ? "点击图片放大，左右方向键翻页" : "本页尚无图片"}</span></div>
       <div class="ppt-page-job-notice" data-ppt-page-status="${ppt.active}" data-asset="${esc(asset?.id || "")}" role="status"${pageJobMessage ? "" : " hidden"}>${pageJobMessage}</div>
       <div class="ppt-page-image-controls">
         <label class="field">本页使用的图片
@@ -1142,12 +1197,21 @@ function pptView() {
           ${button("上传替换图片", "ppt-upload-page", "", "secondary", submitLocked)}</div>
       </div>
       <div class="slide-grid">${thumbnails}</div></div>
-      <aside class="card stack ppt-page-options"><h3>第 ${ppt.active + 1} 页 · ${esc(ppt.outline[ppt.active][0])}</h3>
+      <aside class="card stack ppt-page-options"><h3>第 ${ppt.active + 1} 页 · ${esc(plan[ppt.active].title)}</h3>
         ${asset?.width ? `<p class="meta">当前图片 ${asset.width} × ${asset.height} px</p>` : ""}
         ${busy ? scopeStatus("ppt") : ""}
         <button type="button" class="btn btn-secondary" data-open-media="slide:${ppt.active}" ${asset ? "" : "disabled"}>放大查看本页</button>
-        ${!ready ? button("采用分镜，进入导出", "ppt-use-boards", "", "primary", complete ? locked : "disabled") : ""}
-        ${!ready && !complete ? button("补齐缺失分镜", "ppt-board", "", "secondary", submitLocked) : ""}
+        ${!ready ? `<p class="meta">已有 ${boardCount} / ${plan.length} 张分镜图</p>
+          ${!asset ? button("生成本页分镜图", "ppt-board-redo", "", "secondary", locked) : ""}
+          ${!complete ? button("生成缺失分镜图", "ppt-board", "", "primary", locked) : ""}
+          ${button("确认分镜，进入成稿与导出", "ppt-use-boards", "", "primary", complete ? locked : "disabled")}` : `<div class="ppt-export-options stack">
+          ${imageComplete ? button("导出原图 PPTX", "ppt-export", "image", "primary", ui.pptExport ? "disabled" : locked) +
+            button("提取图片文字导出 PPTX", "ppt-export", "editable", "secondary", ui.pptExport ? "disabled" : locked) +
+            `<details><summary>按大纲另存为简单排版</summary><p class="meta">用大纲的文字重新排版为可编辑对象。</p>
+            ${button("另存原生可编辑 PPTX", "ppt-export-native", "", "secondary", ui.pptExport ? "disabled" : locked)}</details>`
+            : button("补齐缺失成稿", "ppt-final", "", "primary", locked)}
+          ${pptExportStatus(ppt)}</div>`}
+        <details class="ppt-image-route"><summary>本页图片的修改与重出</summary><div class="stack">
         <label class="field">用一句话描述本页修改<textarea class="textarea" data-field="ppt-change" data-ai-send="ppt-ai-revise" maxlength="1000" ${submitLocked} placeholder="例如联网核实本页数据，或只调整配色并保留节点">${esc(edit.change ?? "")}</textarea></label>
         ${button(pending.get("ppt") === "revise-slide" ? "AI 正在修改…" : "请 AI 优化本页提示词", "ppt-ai-revise", "", "secondary", submitLocked + " " + aiSendShortcut)}
         ${pptStreamPreview()}
@@ -1155,23 +1219,19 @@ function pptView() {
         ${edit.suggestion ? `<label class="field">AI 建议（可编辑）<textarea class="textarea" data-field="ppt-suggestion" maxlength="4500">${esc(edit.suggestion)}</textarea></label>
         ${button("采用建议", "ppt-apply-prompt", "", "secondary", submitLocked)}` : ""}
         ${edit.webSearch ? workspaceCommercial.searchSources(edit.webSearch, "ppt-slide-" + ppt.active) : ""}
-        <details><summary>查看或编辑本页生图提示词</summary><textarea class="textarea" aria-label="本页生图提示词" data-field="ppt-prompt" maxlength="4500" ${submitLocked}>${esc(edit.prompt ?? pptPrompt(ppt, ppt.active))}</textarea></details>
+        <details><summary>查看本页生图提示词及补充要求</summary>
+          <p class="ppt-prompt-preview meta">${esc(pptImagePrompt(ppt, ppt.active, {}, false))}</p>
+          <textarea class="textarea" aria-label="补充本页生图提示词" data-field="ppt-prompt" maxlength="4500" ${submitLocked}>${esc(edit.prompt || "")}</textarea></details>
         ${modelSelect("ppt-model", "image", "generate", ppt.model)}
         ${pptResolutionControl(ppt)}
         ${button("按所选分辨率重出本页", ready ? "ppt-redo" : "ppt-board-redo", "", "primary", submitLocked)}
         ${ready ? `
-          ${ppt.outline.some((_, index) => !visualExists(ppt.pages[index])) ? button("补齐缺失成稿", "ppt-final", "", "secondary", submitLocked) : ""}
           <div class="ppt-export-options stack">
             <label><input type="checkbox" data-field="ppt-preserve-image" ${edit.preserveImage === true ? "checked" : ""} ${ui.pptExport ? "disabled" : locked}> 本页只保留原图</label>
             ${button(`补充或校对本页文字${ppt.textboxes[ppt.active]?.length ? "（" + ppt.textboxes[ppt.active].length + "）" : ""}`, "ppt-mark-text", "", "secondary", asset && !ui.pptExport ? locked : "disabled")}
-            ${button("按大纲导出原生可编辑 PPTX", "ppt-export-native", "", "primary", ui.pptExport ? "disabled" : locked)}
-            ${button(ui.pptExport?.editable ? "正在提取图片文字…" : "提取图片文字导出 PPTX", "ppt-export", "editable", "secondary", ui.pptExport ? "disabled" : locked)}
-            ${pptExportStatus(ppt)}
-            <p class="meta">原生版使用大纲排版；图片文字版保留页图并提取可识别的文字，图形和难识别文字仍在底图中，请校对。</p>
-            ${button("导出原图 PPTX", "ppt-export", "image", "secondary", ui.pptExport ? "disabled" : locked)}
           </div>`
           : ""}
-      </aside></div>`;
+      </div></details></aside></div>`;
   }
   const project = workspaceProjects.label();
   const sessions = pptSessionList();
@@ -1200,7 +1260,13 @@ function normalizePptDraft(ppt) {
   }
   if (![0, 1, 2, 3].includes(ppt.stage)) ppt.stage = 0;
   if (![0, 1, 2, 3].includes(ppt.maxStage)) ppt.maxStage = ppt.stage;
-  if (!Number.isInteger(ppt.active) || ppt.active < 0 || ppt.active >= ppt.outline.length) ppt.active = 0;
+  const plan = pptPlan(ppt);
+  // Recover drafts advanced by the earlier outline-only preview.
+  if (ppt.maxStage === 3 && !plan.every((_, index) => Boolean(ppt.pages[index]))) {
+    ppt.maxStage = 2;
+    if (ppt.stage > 2) ppt.stage = 2;
+  }
+  if (!Number.isInteger(ppt.active) || ppt.active < 0 || ppt.active >= plan.length) ppt.active = 0;
 }
 
 function localDate(value) {
@@ -1250,6 +1316,8 @@ function creditsView() {
 }
 const authDialog = document.querySelector("#auth-dialog");
 const accountDialog = document.querySelector("#account-dialog");
+const accountMenu = document.querySelector("#account-menu");
+const upscaleDialog = document.querySelector("#upscale-dialog");
 
 function openAuth(mode = "login", next = "", continuation = null) {
   if (authBusy) return;
@@ -1414,7 +1482,18 @@ function renderAccountIdentity() {
   document.querySelector("#sidebar-name").textContent = account?.name || "访客体验";
   document.querySelector("#sidebar-role").textContent = account?.role === "admin" ? "管理员" : account ? "个人工作区" : "登录后保存作品";
   document.querySelector("#admin-nav").hidden = account?.role !== "admin";
-  document.querySelector(".sidebar-account").setAttribute("aria-controls", account ? "account-dialog" : "auth-dialog");
+  const trigger = document.querySelector(".sidebar-account");
+  trigger.setAttribute("aria-controls", account ? "account-menu" : "auth-dialog");
+  if (account) {
+    trigger.removeAttribute("aria-haspopup");
+    trigger.setAttribute("aria-expanded", String(accountMenu.matches(":popover-open")));
+  } else {
+    trigger.setAttribute("aria-haspopup", "dialog");
+    trigger.removeAttribute("aria-expanded");
+  }
+  document.querySelector("#account-menu-name").textContent = account?.name || "";
+  document.querySelector("#account-menu-login").textContent = account?.login || account?.email || "";
+  document.querySelector("#account-menu-balance").textContent = points(available());
   const initial = Array.from(account?.name || "访")[0];
   for (const avatar of document.querySelectorAll("#sidebar-avatar, [data-account-avatar]")) {
     if (!account?.avatarUrl) avatar.textContent = initial;
@@ -1425,23 +1504,41 @@ function renderAccountIdentity() {
       avatar.replaceChildren(photo);
     }
   }
-  const heading = accountDialog.querySelector("#account-title");
-  if (heading && account) heading.textContent = account.name;
   const remove = accountDialog.querySelector('[data-action="account-avatar-remove"]');
   if (remove) remove.hidden = !account?.avatarUrl;
 }
 
-function openAccount() {
+function toggleAccountMenu() {
+  if (!account) return openAuth();
+  if (accountMenu.matches(":popover-open")) return accountMenu.hidePopover();
+  const trigger = document.querySelector(".sidebar-account");
+  const bounds = trigger.getBoundingClientRect();
+  accountMenu.style.setProperty("--account-menu-bottom", Math.max(8, window.innerHeight - bounds.top + 8) + "px");
+  accountMenu.showPopover({source: trigger});
+  accountMenu.querySelector("a").focus({preventScroll: true});
+}
+
+accountMenu.addEventListener("toggle", () => {
+  document.querySelector(".sidebar-account").setAttribute("aria-expanded", String(accountMenu.matches(":popover-open")));
+});
+accountMenu.addEventListener("keydown", event => {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  event.stopPropagation();
+  accountMenu.hidePopover();
+  document.querySelector(".sidebar-account").focus({preventScroll: true});
+});
+
+function openAccount(section = "profile") {
   if (!account) return openAuth();
   if (accountDialog.open) return;
+  if (accountMenu.matches(":popover-open")) accountMenu.hidePopover();
+  const profile = section !== "password";
   accountDialog.innerHTML = `<header class="account-header">
-    <span class="avatar" data-account-avatar aria-hidden="true"></span><h2 id="account-title"></h2>
-    ${button("×", "close-account", "", "ghost", 'aria-label="关闭账号弹窗" autofocus')}
+    <h2 id="account-title">${profile ? "个人资料" : "修改密码"}</h2>
+    ${button("×", "close-account", "", "ghost", 'aria-label="关闭账户设置" autofocus')}
   </header>
-  <div class="account-tabs" role="group" aria-label="账号选项">
-    ${[["profile", "个人资料"], ["password", "修改密码"], ["usage", "积分消耗"], ["upscale", "超分设置"]].map(([key, label]) => button(label, "account-section", key, "ghost", `aria-controls="account-${key}" aria-pressed="${key === "profile"}"`)).join("")}
-  </div>
-  <section class="account-section stack" id="account-profile" data-account-section="profile" aria-label="个人资料">
+  ${profile ? `<section class="account-section stack" aria-label="个人资料">
     <div class="account-avatar-row"><span class="avatar" data-account-avatar aria-hidden="true"></span>
       <div><div class="account-avatar-actions">
         ${button("上传头像", "account-avatar-pick")}
@@ -1452,84 +1549,25 @@ function openAccount() {
     <p id="account-avatar-status" class="status-line" role="status"></p>
     <form class="stack" id="profile-form">
       <label class="field">显示名称<input class="input" name="name" autocomplete="nickname" minlength="2" maxlength="28" value="${esc(account.name)}" required></label>
-      <label class="field">登录账号<input class="input" value="${esc(account.login || account.email)}" readonly></label>
-      <p class="status-line" role="status"></p><button class="btn btn-primary">保存名称</button>
+      <p class="account-login"><span class="meta">登录账号</span> <strong>${esc(account.login || account.email)}</strong></p>
+      <div class="account-form-actions"><button class="btn btn-primary">保存名称</button><p class="status-line" role="status"></p></div>
     </form>
-  </section>
-  <section class="account-section" id="account-password" data-account-section="password" aria-label="修改密码" hidden>
+  </section>` : `<section class="account-section" aria-label="修改密码">
     <form class="stack" id="password-form">
       <label class="field">当前密码<input class="input" name="current" type="password" autocomplete="current-password" maxlength="128" required></label>
       <label class="field">新密码<input class="input" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required></label>
       <label class="field">确认新密码<input class="input" name="confirm" type="password" autocomplete="new-password" minlength="8" maxlength="128" required></label>
-      <p class="status-line" role="status"></p><button class="btn btn-primary">更新密码</button>
+      <div class="account-form-actions"><button class="btn btn-primary">更新密码</button><p class="status-line" role="status"></p></div>
     </form>
-  </section>
-  <section class="account-section stack" id="account-usage" data-account-section="usage" aria-label="积分消耗" hidden>
-    <div class="account-usage-summary">
-      <div><span class="meta">可用积分</span><strong class="num" id="account-balance"></strong></div>
-      <div><span class="meta">累计已结算消耗</span><strong class="num" id="account-spent"></strong></div>
-    </div>
-    <p id="account-usage-status" class="status-line" role="status"></p>
-    <table class="ds-table account-ledger" aria-label="最近积分明细"><thead><tr><th>时间</th><th>事项</th><th>积分</th></tr></thead><tbody id="account-ledger"></tbody></table>
-    <p class="meta" id="account-ledger-empty" hidden>暂无积分明细。</p>
-    ${button("查看积分明细", "account-credit-details")}
-  </section>
-  <section class="account-section stack" id="account-upscale" data-account-section="upscale" aria-label="超分设置" hidden>
-    <p class="meta" data-upscale-local-status></p>
-    <p class="meta" data-upscale-local-install hidden>在项目文件夹双击「安装可选本地超分.cmd」，确认后下载并检查 Vulkan 显卡。跳过安装仍可使用其他工作台功能。</p>
-    <a data-upscale-engine-link class="btn btn-ghost" target="_blank" rel="noopener noreferrer" hidden>下载本地引擎</a>
-    <form class="stack" id="upscale-settings-form">
-      <p class="meta" data-upscale-cloud-status></p>
-      <a data-upscale-key-link class="btn btn-ghost" target="_blank" rel="noopener noreferrer" hidden>前往百炼获取 API Key</a>
-      <label class="field">北京地域 API Key<input class="input" name="key" type="password" autocomplete="off" maxlength="4096" required></label>
-      <div class="row"><button class="btn btn-primary">保存 API Key</button>
-        ${button("移除 API Key", "clear-upscale-key", "", "ghost", 'data-upscale-key-remove hidden')}</div>
-      <p class="status-line" role="status"></p>
-    </form>
-  </section>
-  <footer class="account-footer">${button("退出登录", "logout", "", "ghost")}</footer>`;
-  accountDialog.querySelector("#account-avatar-input").addEventListener("change", event => {
+  </section>`}`;
+  accountDialog.querySelector("#account-avatar-input")?.addEventListener("change", event => {
     const file = event.target.files[0];
     event.target.value = "";
     if (file) saveAccountAvatar(file);
   });
   renderAccountIdentity();
-  updateAccountUsage();
   accountDialog.showModal();
 }
-
-function updateAccountUsage() {
-  const current = accountDialog.querySelector("#account-balance");
-  if (!current) return;
-  current.textContent = points(available());
-  accountDialog.querySelector("#account-spent").textContent = points(state.spent);
-  accountDialog.querySelector("#account-ledger").innerHTML = walletRows(state.ledger.slice(0, 5));
-  accountDialog.querySelector(".account-ledger").hidden = !state.ledger.length;
-  accountDialog.querySelector("#account-ledger-empty").hidden = Boolean(state.ledger.length);
-}
-
-async function showAccountSection(section) {
-  for (const control of accountDialog.querySelectorAll('[data-action="account-section"]')) {
-    control.setAttribute("aria-pressed", active(control.dataset.value === section));
-  }
-  for (const panel of accountDialog.querySelectorAll("[data-account-section]")) panel.hidden = panel.dataset.accountSection !== section;
-  if (section === "upscale") return refreshUpscaleSettings();
-  if (section !== "usage") return;
-  const owner = identity;
-  const status = accountDialog.querySelector("#account-usage-status");
-  status.textContent = "正在刷新积分…";
-  try {
-    await queueWrite(async () => {
-      if (owner !== identity || !status.isConnected) return;
-      const result = await api("profile/usage");
-      if (owner !== identity) return;
-      updateWallet(result);
-      balance.textContent = points(available());
-    });
-    status.textContent = "";
-  } catch (error) { status.textContent = error.message; }
-}
-
 async function saveAccountAvatar(file) {
   const owner = identity;
   const status = accountDialog.querySelector("#account-avatar-status");
@@ -1563,23 +1601,40 @@ accountDialog.addEventListener("click", event => {
   if (accountBackdropPressed && isAccountBackdrop(event)) accountDialog.close();
   accountBackdropPressed = false;
 });
-accountDialog.addEventListener("close", () => { if (!accountDialog.open) accountDialog.replaceChildren(); });
-const adminSections = [
-  ["models", "模型中心"],
-  ["skills", "Agent 与 Skills"],
-  ["users", "用户管理"],
-  ["templates", "模板管理"],
-  ["access", "邀请码与积分"],
-  ["policy", "生图规则"],
-  ["queue", "任务设置"],
-  ["storage", "聊天记录与存储"],
-  ["tasks", "任务记录"],
-  ["audit", "操作记录"]
+accountDialog.addEventListener("close", () => {
+  if (accountDialog.open) return;
+  accountDialog.replaceChildren();
+  if (document.activeElement === document.body || accountMenu.contains(document.activeElement)) {
+    document.querySelector(".sidebar-account").focus({preventScroll: true});
+  }
+});
+upscaleDialog.addEventListener("close", () => { if (!upscaleDialog.open) upscaleDialog.replaceChildren(); });
+const adminGroups = [
+  ["创作配置", [
+    ["models", "模型中心", "管理服务连接、模型上架和默认模型。"],
+    ["skills", "Agent 与 Skills", "查看工具能力，维护补充规则。"],
+    ["templates", "模板管理", "维护工作台模板。"],
+    ["policy", "生图规则", "查看和启停生图规则。"],
+    ["upscale", "超分设置", "查看本地引擎状态，管理本账号的百炼配置。"]
+  ]],
+  ["用户与积分", [
+    ["users", "用户管理", "维护账号、使用权限和积分。"],
+    ["access", "邀请码与积分", "签发注册邀请码和积分兑换码。"]
+  ]],
+  ["运行与记录", [
+    ["queue", "任务设置", "设置同时生成的任务上限。"],
+    ["tasks", "任务记录", "查看全站任务和待核对结果。"],
+    ["audit", "操作记录", "查看管理员操作历史。"],
+    ["storage", "聊天记录与存储", "查看本地数据保存位置。"]
+  ]]
 ];
+const adminSections = adminGroups.flatMap(([, items]) => items);
 
 function activeAdminSection() {
-  const section = location.hash.slice(1);
-  return adminSections.some(([id]) => id === section) ? section : "models";
+  const hash = location.hash.slice(1);
+  if (hash === "overview") return hash;
+  const section = hash.startsWith("skills/") ? "skills" : hash;
+  return adminSections.some(([id]) => id === section) ? section : "overview";
 }
 
 function adminUsersView() {
@@ -1637,13 +1692,31 @@ function adminView() {
     return page("后台设置", '<p class="empty">此页面供管理员登录后使用。</p>', "admin");
   }
   const section = activeAdminSection();
+  const navItem = ([id, label]) => {
+    const selected = section === id;
+    const group = id === "models" || id === "skills";
+    const href = selected && group ? "#overview" : `#${id}`;
+    const state = group ? `aria-expanded="${selected}"${selected ? ` aria-current="page" aria-controls="ops-${id}-subnav"` : ""}`
+      : selected ? 'aria-current="page"' : "";
+    return `<div class="ops-nav-group">
+      <a class="ops-nav-link" href="${href}" data-ops-focus="${id}" ${state}>${label}${group ? '<span class="ops-nav-arrow" aria-hidden="true">›</span>' : ""}</a>
+      ${selected && id === "models" ? workspaceCommercial.adminNavigation() : ""}
+      ${selected && id === "skills" ? workspaceCommercial.skillsNavigation() : ""}
+    </div>`;
+  };
   const views = {
+    overview: () => `<div class="ops-overview">${adminGroups.map(([title, items]) => `<section class="ops-overview-group">
+      <h2>${title}</h2><div class="ops-overview-links">${items.map(([id, label, description]) => `<a href="#${id}">
+        <span><strong>${label}</strong><small>${description}</small></span><span aria-hidden="true">›</span>
+      </a>`).join("")}</div></section>`).join("")}</div>`,
     models: () => workspaceCommercial.adminPanel(),
     skills: () => workspaceCommercial.skillsPanel(true),
     users: adminUsersView,
     templates: () => workspaceProjects.adminPanel(),
     access: () => opsView("access"),
     policy: adminPolicyView,
+    upscale: () => `<section class="commercial-admin stack" aria-labelledby="admin-upscale-title">
+      <h2 id="admin-upscale-title">超分设置</h2>${upscaleSettingsView()}</section>`,
     queue: () => opsView("queue"),
     storage: adminStorageView,
     tasks: () => opsView("tasks"),
@@ -1651,16 +1724,16 @@ function adminView() {
   };
   return `<section class="ops-shell" aria-labelledby="ops-title">
     <header class="row-between ops-heading"><h1 id="ops-title" tabindex="-1">后台设置</h1>
-      <a class="btn btn-secondary ops-back" href="/#home"><span aria-hidden="true">←</span> 返回工作台首页</a></header>
+      <a class="btn btn-ghost ops-back" href="/#home"><span aria-hidden="true">←</span> 返回工作台</a></header>
     <aside class="ops-sidebar">
       <nav class="ops-nav" aria-label="后台设置菜单">
-        ${adminSections.map(([id, label]) => `<div class="ops-nav-group">
-          <a class="ops-nav-link" href="#${id}"${section === id ? ' aria-current="page"' : ""}>${label}</a>
-          ${id === "models" && section === id ? workspaceCommercial.adminNavigation() : ""}
-        </div>`).join("")}
+        ${navItem(["overview", "设置概览"])}
+        ${adminGroups.map(([title, items]) => `<div class="ops-nav-category"><p>${title}</p>${items.map(navItem).join("")}</div>`).join("")}
       </nav>
     </aside>
-    <div class="ops-content" id="ops-content">${views[section]()}</div>
+    <div class="ops-content" id="ops-content" data-ops-section="${section}">
+      ${views[section]()}
+    </div>
   </section>`;
 }
 
@@ -1702,11 +1775,19 @@ function render() {
   const railScroll = content.querySelector("[data-studio-asset-rail]")?.scrollLeft || 0;
   const fieldScroll = content.querySelector(".studio-control-fields")?.scrollTop || 0;
   const galleryScroll = content.querySelector(".studio-gallery")?.scrollTop || 0;
+  const pptToolsScroll = content.querySelector(".ppt-outline-tools")?.scrollTop || 0;
   const editScroll = Array.from(content.querySelectorAll("[data-edit-scroll]"), node => node.scrollTop);
   const posterScroll = new Map(Array.from(content.querySelectorAll("[data-poster-scroll]"), node =>
     [node.dataset.posterScroll, [node.scrollLeft, node.scrollTop]]));
   mediaItems.clear();
   content.innerHTML = views[ui.route]();
+  const pptTools = content.querySelector(".ppt-outline-tools");
+  if (pptTools) pptTools.scrollTop = pptToolsScroll;
+  if (ui.route === "jobs") {
+    updateJobList();
+    renderTaskPanel();
+    openLatestTask();
+  }
   if (ui.route === "image") {
     window.AnimationComposer?.bind(content);
     const rail = content.querySelector("[data-studio-asset-rail]");
@@ -1753,6 +1834,7 @@ async function refreshRoute() {
       if (section === "skills") await workspaceCommercial.refreshSkills();
       if (section === "models") await workspaceCommercial.refresh("admin");
       if (section === "templates") await workspaceProjects.refresh("admin");
+      if (section === "upscale") await refreshUpscaleSettings();
       if (section === "policy") {
         const policy = await api("admin/image-policy");
         if (owner === identity && ui.route === "admin" && activeAdminSection() === section) {
@@ -1792,6 +1874,8 @@ async function refreshRoute() {
       await workspaceCommercial.refresh("chat");
     } else if (["jobs", "ppt", "poster"].includes(ui.route) && account) {
       await refreshJobs();
+      if (owner === identity && ui.route === "jobs" && jobPage.selected && !jobPage.request &&
+          !jobPage.checking.has(jobPage.selected)) await loadTaskPanel(jobPage.selected);
     } else if (ui.route === "assets" && account) {
       const previous = JSON.stringify(ui.files);
       await refreshFiles();
@@ -1813,6 +1897,7 @@ async function refreshRoute() {
   } catch (error) { notify(error.message); }
 }
 function syncRoute() {
+  if (!workspaceCommercial.confirmSkillsNavigation()) return;
   const legacyAccount = location.pathname === "/" && location.hash === "#account";
   if (legacyAccount) {
     history.replaceState(null, "", "/#" + ui.route);
@@ -1825,7 +1910,8 @@ function syncRoute() {
   if (location.pathname === "/admin" && account?.role === "admin") {
     ui.route = "admin";
   } else {
-    const name = location.hash.slice(1);
+    const hash = location.hash.slice(1);
+    const name = hash.startsWith("skills/") ? "skills" : hash;
     if (name === "admin" && account?.role === "admin") {
       location.replace("/admin");
       return;
@@ -1846,9 +1932,15 @@ function syncRoute() {
   }
   closeMenu();
   if (saveDirty) flushSave();
+  const focusedMenuItem = document.activeElement?.dataset.opsFocus;
   render();
   window.scrollTo(0, 0);
-  refreshRoute();
+  if (focusedMenuItem) {
+    const restoreMenuFocus = () => content.querySelector(`[data-ops-focus="${CSS.escape(focusedMenuItem)}"]`)
+      ?.focus({preventScroll: true});
+    restoreMenuFocus();
+    refreshRoute().then(() => { if (document.activeElement === document.body) restoreMenuFocus(); });
+  } else refreshRoute();
   if (account && ui.route !== "jobs") scheduleJobs(0);
   if (authEntry || lockedRoute) openAuth(authEntry || "login", wantsAdmin ? "admin" : lockedRoute);
   else if (legacyAccount) openAccount();
@@ -2133,18 +2225,46 @@ const actions = {
   "open-account": openAccount,
   "open-upscale-settings": () => {
     if (!requireAccount(actions["open-upscale-settings"])) return;
-    openAccount();
-    return showAccountSection("upscale");
+    if (account.role === "admin") return location.assign("/admin#upscale");
+    if (upscaleDialog.open) return;
+    upscaleDialog.innerHTML = `<header class="account-header"><h2 id="upscale-dialog-title">超分设置</h2>
+      ${button("×", "close-upscale-settings", "", "ghost", 'aria-label="关闭超分设置" autofocus')}</header>${upscaleSettingsView()}`;
+    upscaleDialog.showModal();
+    return refreshUpscaleSettings();
   },
+  "close-upscale-settings": () => upscaleDialog.close(),
+  "refresh-upscale-settings": refreshUpscaleSettings,
   "clear-upscale-key": clearUpscaleKey,
   "job-detail": openJobDetail,
   "close-job-detail": () => document.querySelector("#job-detail-dialog").close(),
   "check-upscale-result": checkUpscaleResult,
+  "jobs-detail": id => loadTaskPanel(id, true),
+  "jobs-close": () => closeTaskPanel(),
+  "jobs-filter": key => filterTaskList(key),
+  "jobs-clear": () => {
+    const input = content.querySelector(".jobs-search");
+    input.value = "";
+    filterTaskList("all", "");
+    input.focus();
+  },
+  "jobs-copy": async id => {
+    await navigator.clipboard.writeText(id);
+    notify("已复制任务编号。");
+  },
+  "jobs-cancel": id => {
+    const job = live.jobs.find(item => item.id === id);
+    if (job?.status !== "queued") return notify("只有等待执行的任务可以取消。");
+    const owner = identity;
+    openModal("取消这条排队任务？", job.label,
+      job.price ? "任务会停止排队，预留积分将释放。" : "任务会停止排队。", "确认取消",
+      () => owner === identity && actions["cancel-live-job"](id));
+  },
   "close-account": () => accountDialog.close(),
-  "account-section": showAccountSection,
+  "account-entry": toggleAccountMenu,
+  "account-section": openAccount,
   "account-avatar-pick": () => accountDialog.querySelector("#account-avatar-input").click(),
   "account-avatar-remove": () => saveAccountAvatar(),
-  "account-credit-details": () => { accountDialog.close(); go("credits"); },
+  "account-credit-details": () => accountMenu.hidePopover(),
   "close-auth": closeAuth,
   "auth-mode": mode => {
     if (authBusy) return;
@@ -2371,7 +2491,7 @@ const actions = {
     if (owner !== identity) return;
     updateWallet(result);
     await refreshJobs();
-    render();
+    if (owner === identity && ui.route !== "jobs") render();
   },
   "delete-live-job": id => {
     const job = live.jobs.find(item => item.id === id);
@@ -2388,7 +2508,7 @@ const actions = {
         await refreshJobs();
         if (owner !== identity) return;
         notify("生成记录已删除。");
-        render();
+        if (ui.route !== "jobs") render();
       });
   },
   "reconcile-job": id => openModal("确认上游任务失败", "确认 CPA 未交付结果后释放预留积分。", "确认前请按任务号核对 CPA。", "确认失败并释放", async () => {
@@ -2474,6 +2594,28 @@ const actions = {
     render();
   },
   "ppt-outline": makeOutline,
+  "ppt-jump-refine": () => {
+    focusPptRefinement('[data-field="ppt-refine"]');
+  },
+  "ppt-refine-page": value => {
+    const ppt = state.ppt;
+    const page = Number(value);
+    if (ppt.stage !== 1 || scopeInProgress("ppt") || (page && !ppt.outline[page - 1])) return;
+    ui.pptRefineTarget = page ? {ppt, page} : null;
+    delete ui.pptRefineStatus;
+    render();
+    focusPptRefinement('[data-field="ppt-refine"]');
+  },
+  "ppt-refine-discuss": () => refinePptOutline(),
+  "ppt-refine-generate": () => refinePptOutline(true),
+  "ppt-refine-apply": applyPptProposal,
+  "ppt-refine-discard": () => {
+    delete state.ppt.refineProposal;
+    delete ui.pptRefineStatus;
+    save();
+    render();
+    focusPptRefinement('[data-action="ppt-refine-generate"]');
+  },
   "ppt-manual-outline": openManualPptOutline,
   "ppt-export-native": () => savePpt(false, true),
   "ppt-discuss": () => discussPpt(),
@@ -2485,17 +2627,18 @@ const actions = {
   "ppt-style": value => {
     const ppt = state.ppt;
     if (value === ppt.style || scopeInProgress("ppt")) return;
+    const hasPageWork = ppt.boards.some(Boolean) || ppt.pages.some(Boolean) || ppt.tracked.length ||
+      Object.keys(ppt.pageEdits).length || Object.keys(ppt.textboxes).length;
     const apply = () => {
       if (state.ppt !== ppt || scopeInProgress("ppt")) return;
-      if (ppt.stage === 1) resetDeck();
+      if (hasPageWork) resetDeck();
       ppt.style = value;
-      ppt.maxStage = ppt.stage;
+      ppt.maxStage = Math.min(ppt.maxStage, 1);
       save();
       render();
       content.querySelector('[data-action="ppt-open-templates"]')?.focus({preventScroll: true});
     };
-    if (ppt.stage === 1 && (ppt.boards.some(Boolean) || ppt.pages.some(Boolean) ||
-        Object.keys(ppt.pageEdits).length || Object.keys(ppt.textboxes).length)) {
+    if (hasPageWork) {
       return openModal("更换 PPT 模板？", `将改用「${value}」。`,
         "大纲保留。已有分镜和成稿仍可在素材中查看，本项目的逐页修改和文字框设置会清空。", "更换模板", apply);
     }
@@ -2504,11 +2647,25 @@ const actions = {
   "ppt-step": value => {
     if (scopeInProgress("ppt")) return notify("正在生成，请等待任务结算后再修改。");
     if (Number(value) > state.ppt.maxStage) return notify("请先完成当前步骤。");
+    delete ui.pptRefineTarget;
     state.ppt.stage = Number(value);
     save();
     render();
   },
   "ppt-board": () => buildPptPages("board"),
+  "ppt-review-outline": () => {
+    const ppt = state.ppt;
+    if (ppt.stage !== 1 || scopeInProgress("ppt") || pptProposalRows(ppt).length || !pptPlanReady(ppt)) return;
+    delete ui.pptRefineTarget;
+    ppt.stage = 2;
+    ppt.maxStage = Math.max(ppt.maxStage, 2);
+    save();
+    render();
+    window.scrollTo(0, 0);
+  },
+  "ppt-add-page": () => openStoryboardPage(true),
+  "ppt-edit-page": () => openStoryboardPage(),
+  "ppt-remove-page": removeStoryboardPage,
   "ppt-slide": value => { state.ppt.active = Number(value); save(); render(); },
   "ppt-slide-step": value => stepPptSlide(Number(value)),
   "ppt-final": () => buildPptPages("final"),
@@ -2560,6 +2717,10 @@ document.addEventListener("click", event => {
 content.addEventListener("input", event => {
   const field = event.target.dataset.field;
   const value = event.target.value;
+  if (field === "job-search") {
+    filterTaskList(jobPage.filter, value);
+    return;
+  }
   if (field?.startsWith("native-image-") && ui.route === "image" && studioFormat() !== "still") {
     const key = field.slice("native-image-".length);
     const draft = nativeStudioDraft();
@@ -2644,6 +2805,11 @@ content.addEventListener("input", event => {
   if (field === "ppt-prompt") pptPageEdit().prompt = value;
   if (field === "ppt-suggestion") pptPageEdit().suggestion = value;
   if (field === "ppt-discussion") state.ppt.discussionDraft = value;
+  if (field === "ppt-refine") {
+    if (ui.pptRefineTarget?.ppt === state.ppt) ui.pptRefineTarget.draft = value;
+    else state.ppt.refineDraft = value;
+  }
+  if (field === "ppt-template-asset") state.ppt.templateAssetId = value;
   if (field === "ppt-chat-history" && value) {
     switchPptChat(value).catch(error => notify(error.message));
     return;
@@ -2706,16 +2872,33 @@ content.addEventListener("input", event => {
     state.ppt.requirements[field.slice("ppt-requirement-".length)] = value;
     state.ppt.maxStage = 0;
   }
-  if (field === "ppt-layout") state.ppt.outline[Number(event.target.dataset.index)][2] = value;
-  if (["ppt-title","ppt-detail"].includes(field)) {
+  if (field === "ppt-structure" || field === "ppt-agenda") {
+    const ppt = state.ppt;
+    const previous = pptPlan(ppt);
+    ppt.agenda ??= Boolean(ppt.structure);
+    ppt[field.slice(4)] = event.target.checked;
+    reconcilePptPages(ppt, previous);
+    delete ppt.refineProposal;
+    save();
+    render();
+    content.querySelector(`[data-field="${field}"]`)?.focus({preventScroll:true});
+    return;
+  }
+  if (["ppt-title", "ppt-detail", "ppt-layout", "ppt-chapter"].includes(field)) {
     const ppt = state.ppt;
     const index = Number(event.target.dataset.index);
-    ppt.outline[index][field === "ppt-title" ? 0 : 1] = value;
-    if (ppt.boards[index]) ppt.boards[index] = null;
-    if (ppt.pages[index]) ppt.pages[index] = null;
-    delete ppt.pageEdits[index];
-    delete ppt.textboxes[index];
-    ppt.maxStage = 1;
+    const previous = pptPlan(ppt);
+    ppt.outline[index][["ppt-title", "ppt-detail", "ppt-layout", "ppt-chapter"].indexOf(field)] = value;
+    const next = pptPlan(ppt);
+    const origins = next.length === previous.length && next.every((page, pos) => page.source === previous[pos].source)
+      ? next.map((_, pos) => pos) : undefined;
+    reconcilePptPages(ppt, previous, origins);
+    const list = content.querySelector(".ppt-plan-order");
+    if (list) {
+      const plan = pptPlan(ppt);
+      list.previousElementSibling.textContent = `预定页序（${plan.length} 页）`;
+      list.innerHTML = plan.map(page => `<li><span class="meta">${esc(pptLayouts[page.layout])}</span> ${esc(page.number ? page.number + "  " : "")}${esc(page.title)}</li>`).join("");
+    }
   }
   if (field === "ppt-page-image") {
     const ppt = state.ppt;
@@ -2745,7 +2928,8 @@ content.addEventListener("toggle", event => {
 }, true);
 document.addEventListener("submit", async event => {
   const form = event.target;
-  if (!content.contains(form) && !authDialog.contains(form) && !accountDialog.contains(form) && !adminUserDialog.contains(form)) return;
+  if (!content.contains(form) && !authDialog.contains(form) && !accountDialog.contains(form) &&
+      !upscaleDialog.contains(form) && !adminUserDialog.contains(form)) return;
   event.preventDefault();
   if ((form.id === "auth-form" && authBusy) || (form.id === "admin-user-form" && form.getAttribute("aria-busy") === "true")) return;
   if (form.hasAttribute("data-project")) return workspaceProjects.submit(form);
@@ -2791,10 +2975,7 @@ document.addEventListener("submit", async event => {
       refreshRoute();
       scheduleJobs(0);
     } else if (form.id === "upscale-settings-form") {
-      const result = await api("profile/upscale", "PUT", {key: data.key});
-      form.reset();
-      displayUpscaleSettings(result);
-      status.textContent = "已保存。";
+      await saveUpscaleSettings(form, {key: data.key});
     } else if (form.id === "guest-chat-form") {
       ui.guestChatPrompt = data.text.trim();
       if (ui.guestChatPrompt) openAuth();
@@ -3137,6 +3318,10 @@ content.addEventListener("scroll", event => {
 window.addEventListener("resize", syncStudioAssetArrows);
 window.addEventListener("hashchange", syncRoute);
 content.addEventListener("keydown", event => {
+  if (event.key === "Escape" && event.target.closest(".jobs-panel")) {
+    closeTaskPanel();
+    return;
+  }
   const composer = event.target.closest("textarea[data-ai-send]");
   if (composer && event.key === "Enter" && event.ctrlKey && !event.altKey && !event.metaKey &&
       !event.shiftKey && !event.isComposing && event.keyCode !== 229 && !event.defaultPrevented) {
@@ -3158,7 +3343,7 @@ content.addEventListener("keydown", event => {
 document.addEventListener("keydown", event => { if (event.key === "Escape") closeMenu(); });
 document.addEventListener("visibilitychange", () => { if (document.hidden && saveDirty) flushSave(); });
 window.addEventListener("beforeunload", event => {
-  if (!account || (!saveDirty && !savePending)) return;
+  if (!account || (!saveDirty && !savePending && !workspaceCommercial.skillsHasUnsavedChanges())) return;
   event.preventDefault();
   event.returnValue = "";
 });

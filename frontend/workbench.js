@@ -3,6 +3,7 @@
 const live = {
   models: [], defaults: {}, jobs: [], allJobs: [], hiddenJobs: new Set(), trash: null, operations: null, poll: null,
   jobStream: null, jobWatchRequested: false, jobUpdates: Promise.resolve(), jobVersion: 0, clock: null, pptReply: null,
+  imageSubmissions: new Map(),
   catalog: async () => {
     const result = await api("catalog");
     live.models = result.models;
@@ -10,6 +11,13 @@ const live = {
   }
 };
 const jobLabels = {queued: "等待执行", running: "正在生成", succeeded: "已交付", failed: "失败", unknown: "待核对", cancelled: "已取消"};
+const jobFilters = [
+  ["all", "全部", () => true], ["active", "进行中", activeJob],
+  ["unknown", "待核对", job => job.status === "unknown"],
+  ["delivered", "已交付", job => job.status === "succeeded"],
+  ["ended", "失败 / 取消", job => ["failed", "cancelled"].includes(job.status)]
+];
+const jobPage = {filter: "all", query: "", selected: undefined, detail: null, request: null, checking: new Set(), error: ""};
 
 function modelFor(kind, capability, value) {
   const required = capability ? [capability].flat() : [];
@@ -159,12 +167,15 @@ function confirmImages(scope, model, inputs, onSubmitted = null, submitTool = nu
   const owner = identity;
   const documentId = state[scope].documentId || (state[scope].documentId = crypto.randomUUID());
   const generationId = scope === "ppt" ? state.ppt.generationId || (state.ppt.generationId = crypto.randomUUID()) : undefined;
-  const requests = inputs.map(input => ({...input, context: {...input.context, documentId, generationId},
+  const projectId = scope === "ppt" ? state.activeProjectId || undefined : undefined;
+  const requests = inputs.map(input => ({...input, context: {...input.context, documentId, generationId, projectId},
     scope, modelId: model.id, unitPrice: model.price, requestId: crypto.randomUUID()}));
   openModal("确认提交", [details, model.name, `${inputs.length} 张`, `预计 ${points(amount)} 积分`].filter(Boolean).join(" · "),
     submitNote || "提交后可以在「生成任务」查看进度，已交付的图片会自动保存。", "确认生成", async () => {
       if (identity !== owner || pending.has(scope)) return;
       pending.set(scope, 0);
+      live.imageSubmissions.set(scope, Math.floor(Date.now() / 1000));
+      if (ui.route === scope || (scope === "image" && ui.route === "image-edit")) render();
       let submitted = false;
       try {
         await saveNow();
@@ -188,6 +199,7 @@ function confirmImages(scope, model, inputs, onSubmitted = null, submitTool = nu
         save();
       } finally {
         if (identity === owner) {
+          live.imageSubmissions.delete(scope);
           pending.delete(scope);
           if (submitted) scheduleJobs();
           if (ui.route === scope || (scope === "image" && ui.route === "image-edit")) render();
@@ -205,12 +217,15 @@ function stopJobUpdates() {
   clearTimeout(live.poll);
   clearTimeout(live.clock);
   live.clock = null;
+  live.imageSubmissions.clear();
   live.jobStream?.abort();
   live.jobStream = null;
   live.jobWatchRequested = false;
   live.jobUpdates = Promise.resolve();
   live.hiddenJobs.clear();
   live.pptReply = null;
+  Object.assign(jobPage, {filter: "all", query: "", selected: undefined, detail: null, request: null, error: ""});
+  jobPage.checking.clear();
 }
 
 function scheduleJobs(delay = 0) {
@@ -293,9 +308,12 @@ async function applyJobs(result, owner) {
   const newlyFinished = ["image", "poster", "ppt"].flatMap(scope => (state[scope].tracked || [])
     .filter(item => !item.handled && ended.includes(records.get(item.id)?.status)).map(item => ({scope, item, job: records.get(item.id)})));
   const previouslyDelivered = new Set(previousJobs.filter(job => job.status === "succeeded").map(job => job.id));
-  const newImage = jobs.some(job => job.scope === "image" && job.status === "succeeded" && !previouslyDelivered.has(job.id)
-    && !ui.files.some(file => file.id === job.assetId));
-  if (newlyFinished.length || newImage) {
+  const knownAssets = new Set(ui.files.map(file => file.id));
+  const newOutput = jobs.filter(job => job.status === "succeeded" && job.assetId && !previouslyDelivered.has(job.id)
+    && !knownAssets.has(job.assetId));
+  const newImage = newOutput.some(job => job.scope === "image");
+  const settledJob = previousJobs.some(job => !ended.includes(job.status) && ended.includes(records.get(job.id)?.status));
+  if (newlyFinished.length || newOutput.length || settledJob) {
     const [files, session] = await Promise.all([api("assets"), api("session")]);
     if (identity !== owner) return;
     ui.files = files.items;
@@ -336,8 +354,8 @@ async function applyJobs(result, owner) {
         }
       }
     }
-    if (state.ppt.boards.filter(Boolean).length >= state.ppt.outline.length && state.ppt.outline.length) state.ppt.maxStage = Math.max(state.ppt.maxStage, 2);
-    if (state.ppt.pages.filter(Boolean).length >= state.ppt.outline.length && state.ppt.outline.length) state.ppt.maxStage = 3;
+    const planned = pptPlan(state.ppt).length;
+    if (planned && state.ppt.boards.some(Boolean)) state.ppt.maxStage = Math.max(state.ppt.maxStage, 2);
     save();
     balance.textContent = points(available());
   }
@@ -371,7 +389,7 @@ async function applyJobs(result, owner) {
       if (slot.hasAttribute("data-poster-job-error")) {
         slot.innerHTML = jobErrorLink(records.get(slot.dataset.jobId) || posterFormatJob(slot.dataset.posterJobError, slot.dataset.asset));
       } else {
-        const markup = posterStageJobStatus(posterFormatJob(slot.dataset.posterStageStatus, slot.dataset.asset));
+        const markup = posterStageJobStatus(posterFormatJob(slot.dataset.posterStageStatus));
         slot.innerHTML = markup;
         slot.hidden = !markup;
       }
@@ -382,7 +400,19 @@ async function applyJobs(result, owner) {
       note.hidden = !markup;
     }
   }
-  if ((changed && ui.route === "jobs") || (ui.route === "ppt" && wasPptBusy !== scopeInProgress("ppt")) ||
+  if (ui.route === "jobs" && (changed || !loaded)) {
+    updateJobList();
+    const job = records.get(jobPage.selected);
+    if (jobPage.selected === undefined) openLatestTask();
+    else if (job?.hidden) closeTaskPanel(Boolean(content.querySelector(".jobs-panel")?.contains(document.activeElement)));
+    else if (job && jobPage.detail && !jobPage.request && !jobPage.checking.has(job.id) &&
+             (job.status !== jobPage.detail.status || job.updated !== jobPage.detail.updated ||
+              job.previewVersion !== jobPage.detail.previewVersion)) {
+      loadTaskPanel(job.id);
+    }
+    balance.textContent = points(available());
+  }
+  if ((ui.route === "ppt" && (!loaded || wasPptBusy !== scopeInProgress("ppt"))) ||
       (ui.route === "poster" && (!loaded || wasPosterActive !== [...activePosterFormats()].sort().join(","))) ||
       newlyFinished.some(entry => entry.scope === ui.route && ui.route !== "image") ||
       (ui.route === "image-edit" && (newImage || newlyFinished.some(entry => entry.scope === "image" && imageJobOperation(entry.job) === "edit")))) render();
@@ -397,11 +427,38 @@ function jobSeconds(start, end = Math.floor(Date.now() / 1000)) {
   return Math.max(0, end - start);
 }
 
+function jobClockText(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds / 60) % 60;
+  const digits = value => String(value).padStart(2, "0");
+  return (hours ? `${digits(hours)}:` : "") + `${digits(minutes)}:${digits(seconds % 60)}`;
+}
+
 function tickJobClocks() {
   live.clock = null;
-  const clocks = document.querySelectorAll("[data-job-since]");
-  for (const clock of clocks) clock.textContent = `已用 ${jobSeconds(Number(clock.dataset.jobSince))} 秒`;
-  if (clocks.length) live.clock = setTimeout(tickJobClocks, 1000);
+  const clocks = document.querySelectorAll("time[data-job-since]");
+  const now = Math.floor(Date.now() / 1000);
+  for (const clock of clocks) {
+    const elapsed = jobSeconds(Number(clock.dataset.jobSince), now);
+    const duration = `PT${elapsed}S`;
+    if (clock.dateTime !== duration) {
+      clock.dateTime = duration;
+      clock.textContent = jobClockText(elapsed);
+      clock.setAttribute("aria-label", `已用 ${elapsed} 秒`);
+    }
+  }
+  if (clocks.length) scheduleJobClocks();
+}
+
+function scheduleJobClocks() {
+  if (live.clock === null) live.clock = setTimeout(tickJobClocks, 1000 - Date.now() % 1000 + 5);
+}
+
+function runningElapsed(start) {
+  if (!Number.isFinite(start)) return "";
+  scheduleJobClocks();
+  const elapsed = jobSeconds(start);
+  return `<time class="job-elapsed job-clock" role="timer" aria-live="off" aria-label="已用 ${elapsed} 秒" datetime="PT${elapsed}S" data-job-since="${start}">${jobClockText(elapsed)}</time>`;
 }
 
 function jobElapsed(job) {
@@ -410,13 +467,26 @@ function jobElapsed(job) {
   return Number.isFinite(job.updated) ? `<span class="job-elapsed">耗时 ${jobSeconds(job.created, job.updated)} 秒</span>` : "";
 }
 
-function runningElapsed(start) {
-  if (!live.clock) live.clock = setTimeout(tickJobClocks, 1000);
-  return `<span class="job-elapsed" data-job-since="${start}">已用 ${jobSeconds(start)} 秒</span>`;
+function activeJobProgress(label, since) {
+  return `<span class="job-progress is-live"><span class="job-pulse" aria-hidden="true"></span><strong>${esc(label)}</strong>${runningElapsed(since)}</span>`;
 }
 
 function jobProgress(job) {
-  return `<span class="job-progress">${activeJob(job) ? '<span class="job-spinner" aria-hidden="true"></span>' : ""}<strong>${esc(jobLabels[job.status] || job.status)}</strong>${jobElapsed(job)}</span>`;
+  const label = jobLabels[job.status] || job.status;
+  if (activeJob(job)) return activeJobProgress(label, job.created);
+  return `<span class="job-progress"><strong>${esc(label)}</strong>${jobElapsed(job)}</span>`;
+}
+
+function generationActivity(format) {
+  const submitting = live.imageSubmissions.get("image");
+  if (submitting !== undefined) return activeJobProgress("正在提交", submitting);
+  const jobs = live.jobs.filter(job => job.scope === "image" && activeJob(job) && imageJobOperation(job) === "generate" &&
+    (job.context?.outputFormat || "still") === format);
+  if (!jobs.length) return "";
+  const running = jobs.filter(job => job.status === "running").length;
+  const label = [running ? `生成中 ${running} 张` : "", jobs.length > running ? `排队 ${jobs.length - running} 张` : ""].filter(Boolean).join(" · ");
+  const startedAt = jobs.reduce((first, job) => Number.isFinite(job.created) ? Math.min(first, job.created) : first, Infinity);
+  return activeJobProgress(label, startedAt);
 }
 
 function hasJobError(job) {
@@ -474,22 +544,24 @@ function scopeStatus(scope, operation) {
 }
 
 function scopeStatusMarkup(scope, operation) {
+  const submitting = live.imageSubmissions.get(scope);
+  const submission = submitting === undefined ? "" : activeJobProgress("正在提交", submitting);
   const tracked = (state[scope].tracked || []).filter(item => !live.hiddenJobs.has(item.id));
-  if (!tracked.length) return "";
+  if (!tracked.length) return submission;
   const selectedPptPage = scope === "ppt" && state.ppt.stage >= 2;
   const jobs = tracked.map(item => live.jobs.find(job => job.id === item.id)).filter(job => {
     if (!job || (operation && imageJobOperation(job) !== operation)) return false;
     if (!selectedPptPage) return true;
     return job.context?.index === state.ppt.active && (job.context.phase === "board") === (state.ppt.stage === 2);
   });
-  if (selectedPptPage && !jobs.length) return "";
-  if (operation && !jobs.length && tracked.every(item => (item.operation && item.operation !== operation) || live.jobs.some(job => job.id === item.id))) return "";
+  if (selectedPptPage && !jobs.length) return submission;
+  if (operation && !jobs.length && tracked.every(item => (item.operation && item.operation !== operation) || live.jobs.some(job => job.id === item.id))) return submission;
   const activeEdits = operation === "edit" ? jobs.filter(activeJob) : [];
   const latest = activeEdits.length ? activeEdits : jobs.slice(selectedPptPage || operation === "edit" ? -1 : -12);
   const summary = latest.length ? latest.map(job => `<span class="workbench-job-entry">${esc(job.label)} · ${jobProgress(job)}${job.status === "succeeded" && latest.length === 1 ? sizeDetail(job) : ""}${jobErrorLink(job)}</span>`).join("") : "已提交，正在同步进度";
   const recentEditError = operation === "edit" && jobs.findLast(hasJobError);
   const preview = jobs.findLast(job => job.previewVersion && job.status === "running");
-  const markup = `<div class="notice workbench-job-note"><div>${summary}${recentEditError && !latest.includes(recentEditError) ? `<span class="workbench-job-entry">上次错误 · ${esc(recentEditError.label)} ${jobErrorLink(recentEditError)}</span>` : ""}</div>${button("查看任务", "open-jobs", "", "ghost")}</div>${jobPreview(preview)}`;
+  const markup = `${submission}<div class="notice workbench-job-note"><div>${summary}${recentEditError && !latest.includes(recentEditError) ? `<span class="workbench-job-entry">上次错误 · ${esc(recentEditError.label)} ${jobErrorLink(recentEditError)}</span>` : ""}</div>${button("查看任务", "open-jobs", "", "ghost")}</div>${jobPreview(preview)}`;
   if (scope === "poster" && jobs.length && jobs.length === tracked.length &&
       jobs.every(job => ["succeeded", "failed", "cancelled"].includes(job.status))) {
     const complete = jobs.filter(job => job.status === "succeeded").length;
@@ -507,12 +579,250 @@ function sizeDetail(job) {
 
 function jobsView() {
   if (!account) return page("生成任务", '<p class="empty"><a href="#account">登录后查看生成记录</a></p>', "jobs");
-  const rows = live.jobs.map(job => `<tr><td>${button(job.label, "job-detail", job.id, "ghost", 'data-job-title')}<br><small class="meta">${esc(job.id)}</small></td><td>${esc(job.modelName)}</td><td>${jobProgress(job)}${sizeDetail(job)}<br><small class="meta">${esc(job.error || job.review || "")}</small></td><td>${points(job.price)}</td><td>${jobErrorLink(job) || button("详情", "job-detail", job.id, "ghost")}${job.assetId ? `<a class="btn btn-ghost" href="/api/assets/${esc(job.assetId)}/download">下载</a>` : ""}${job.status === "queued" ? button("取消", "cancel-live-job", job.id) : ""}${button("删除记录", "delete-live-job", job.id, "ghost")}</td></tr>`).join("");
-  return page("生成任务", `<div class="card table-wrap"><table class="ds-table"><thead><tr><th>任务</th><th>模型</th><th>状态</th><th>积分</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>${rows ? "" : '<p class="meta">暂无生成记录。</p>'}</div>`, "jobs");
+  return page("生成任务", `<div class="jobs-workspace">
+    <section class="jobs-list" aria-label="任务列表">
+      <div class="jobs-toolbar">
+        <nav class="jobs-filters" aria-label="按状态筛选">${jobFilters.map(([key, label]) =>
+          button(label, "jobs-filter", key, "ghost", 'aria-pressed="false"')).join("")}</nav>
+        <input class="input jobs-search" type="search" data-field="job-search" aria-label="搜索任务名或编号" placeholder="搜索任务名或编号" value="${esc(jobPage.query)}">
+      </div>
+      <table class="jobs-table" aria-label="生成任务记录">
+        <thead><tr><th scope="col">任务 / 模型</th><th scope="col">状态</th><th scope="col">提交时间</th><th scope="col">积分</th><th scope="col">操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="jobs-empty" hidden><p role="status"></p>${button("清除筛选", "jobs-clear", "", "ghost")}</div>
+      <p class="jobs-count meta" role="status"></p>
+    </section>
+    <aside class="jobs-panel" id="jobs-panel" aria-labelledby="jobs-panel-title" hidden>
+      <header><h2 id="jobs-panel-title">任务详情</h2>${button("×", "jobs-close", "", "ghost", 'aria-label="关闭任务详情"')}</header>
+      <div class="jobs-panel-body"></div>
+    </aside>
+  </div>`, "jobs", "查看近期记录、进行中的任务和待核对结果。");
+}
+
+function jobKind(job) {
+  if (job.scope === "image") return imageJobOperation(job) === "edit" ? "图片编辑" : "AI 生图";
+  return {poster: "海报", ppt: "PPT", chat: "AI 对话"}[job.scope] || "生成任务";
+}
+
+function jobCharge(job) {
+  if (job.upscaleMethod === "aliyun") return ["外部结算", "百炼账号"];
+  if (!job.price) return ["0 积分", ""];
+  if (["failed", "cancelled"].includes(job.status)) return ["0 积分", "预留已释放"];
+  return [points(job.price) + " 积分", job.status === "succeeded" ? "已结算" : "已预留"];
+}
+
+function jobBadge(job) {
+  const glyph = {queued: "◷", running: "↻", succeeded: "✓", failed: "!", unknown: "?", cancelled: "×"};
+  const label = {queued: "排队中", running: "生成中"}[job.status] || jobLabels[job.status] || job.status;
+  return `<span class="jobs-badge" data-status="${esc(job.status)}"><span aria-hidden="true">${glyph[job.status] || "·"}</span>${esc(label)}</span>`;
+}
+
+function taskElapsed(job) {
+  if (job.status === "unknown") return "上游结果待确认";
+  if (!activeJob(job)) return jobElapsed(job);
+  const elapsed = runningElapsed(job.created);
+  return elapsed ? (job.status === "queued" ? "已排队 " : "已等待 ") + elapsed : "";
+}
+
+function jobAssetUrl(id) {
+  return "/api/assets/" + encodeURIComponent(id);
+}
+
+function updateJobList() {
+  const list = content.querySelector(".jobs-list");
+  if (!list) return;
+  const term = jobPage.query.trim().toLowerCase();
+  const matches = live.jobs.filter(job => `${job.label} ${job.id}`.toLowerCase().includes(term));
+  const jobs = matches.filter(jobFilters.find(([key]) => key === jobPage.filter)[2]);
+  for (const [key, label, test] of jobFilters) {
+    const control = list.querySelector(`[data-action="jobs-filter"][data-value="${key}"]`);
+    control.setAttribute("aria-pressed", String(key === jobPage.filter));
+    const markup = `${label} <span>${matches.filter(test).length}</span>`;
+    if (control.innerHTML !== markup) control.innerHTML = markup;
+  }
+
+  const assets = new Map(ui.files.map(asset => [asset.id, asset]));
+  const tbody = list.querySelector("tbody");
+  const focused = tbody.contains(document.activeElement) ? document.activeElement : null;
+  const focusedRow = focused?.closest("tr")?.dataset.jobId;
+  const focusedAction = focused?.matches(".jobs-title") ? ".jobs-title" : ".jobs-row-action";
+  tbody.innerHTML = jobs.map(job => {
+    const missing = jobPage.detail?.id === job.id && jobPage.detail.assetAvailable === false;
+    const asset = job.status === "succeeded" && !missing && assets.get(job.assetId);
+    const path = asset ? jobAssetUrl(asset.id) : "";
+    const title = esc(job.label);
+    const selected = jobPage.selected === job.id;
+    const [charge, settlement] = jobCharge(job);
+    const action = {queued: "查看任务", running: "查看进度", failed: "查看原因", unknown: "查看核对"}[job.status] || "查看详情";
+    const controls = `aria-controls="jobs-panel" aria-expanded="${selected}"`;
+    return `<tr data-job-id="${esc(job.id)}"${selected ? ' class="is-selected"' : ""}>
+      <td><div class="jobs-task">${asset?.mime?.startsWith("image/") ? `<img class="jobs-thumb" src="${path}" alt="" loading="lazy">` : '<span class="jobs-thumb" aria-hidden="true">▧</span>'}
+        <div><button type="button" class="jobs-title" data-action="jobs-detail" data-value="${esc(job.id)}" ${controls}>${title}</button>
+          <span class="jobs-sub">${esc(jobKind(job))}${job.modelName ? " · " + esc(job.modelName) : ""}</span></div></div></td>
+      <td>${jobBadge(job)}<span class="jobs-sub">${taskElapsed(job)}</span></td>
+      <td class="num">${job.created ? esc(localDate(job.created)) : "—"}</td>
+      <td><span class="num">${charge}</span>${settlement ? `<span class="jobs-sub">${settlement}</span>` : ""}</td>
+      <td>${asset ? `<a class="btn btn-ghost jobs-row-action" href="${path}/download" aria-label="下载 ${title}">下载</a>` :
+        button(action, "jobs-detail", job.id, "ghost", `data-jobs-action ${controls} aria-label="${action} ${title}"`)}</td></tr>`;
+  }).join("");
+  const empty = list.querySelector(".jobs-empty");
+  list.querySelector("table").hidden = !jobs.length;
+  empty.hidden = Boolean(jobs.length);
+  const loaded = ui.imageRecordsLoaded;
+  const message = !loaded ? "正在读取生成任务…" : !live.jobs.length ? "暂无生成任务。" : "未找到匹配的任务。";
+  const emptyText = empty.querySelector("p");
+  if (emptyText.textContent !== message) emptyText.textContent = message;
+  empty.querySelector("button").hidden = !loaded || (!term && jobPage.filter === "all");
+  const count = list.querySelector(".jobs-count");
+  const summary = loaded ? `显示 ${jobs.length} / ${live.jobs.length} 条任务` : "";
+  if (count.textContent !== summary) count.textContent = summary;
+  count.hidden = !loaded;
+  if (focusedRow) {
+    const row = Array.from(tbody.rows).find(item => item.dataset.jobId === focusedRow);
+    (row?.querySelector(focusedAction) || row?.querySelector("[data-jobs-action]") ||
+      list.querySelector('[data-action="jobs-filter"][aria-pressed="true"]'))?.focus({preventScroll: true});
+  }
+}
+
+function filterTaskList(key, query = jobPage.query) {
+  jobPage.filter = key;
+  jobPage.query = query;
+  if (jobPage.selected === undefined) jobPage.selected = null;
+  const job = live.jobs.find(item => item.id === jobPage.selected);
+  const matches = jobFilters.find(([value]) => value === key)[2];
+  if (job && (!matches(job) || !`${job.label} ${job.id}`.toLowerCase().includes(query.trim().toLowerCase()))) closeTaskPanel(false);
+  else updateJobList();
+}
+
+function openLatestTask() {
+  if (jobPage.selected !== undefined || !ui.imageRecordsLoaded) return;
+  const latest = live.jobs.find(job => job.status === "succeeded");
+  if (latest) loadTaskPanel(latest.id);
+}
+
+function closeTaskPanel(restoreFocus = true) {
+  const id = jobPage.selected;
+  Object.assign(jobPage, {selected: null, detail: null, request: null, error: ""});
+  updateJobList();
+  renderTaskPanel();
+  if (restoreFocus) {
+    (content.querySelector(`.jobs-title[data-value="${CSS.escape(id || "")}"]`) ||
+      content.querySelector(".jobs-search"))?.focus({preventScroll: true});
+  }
+}
+
+async function loadTaskPanel(id, focus = false) {
+  const owner = identity;
+  const request = Symbol();
+  const same = jobPage.selected === id;
+  const snapshot = live.jobs.find(job => job.id === id);
+  if (!same) jobPage.detail = null;
+  Object.assign(jobPage, {selected: id, request, error: ""});
+  if (!same || focus) {
+    updateJobList();
+    renderTaskPanel(focus);
+  }
+  try {
+    const {job} = await api(`jobs/${encodeURIComponent(id)}`);
+    if (owner !== identity || jobPage.request !== request) return;
+    jobPage.detail = job;
+    const latest = live.jobs.find(item => item.id === id);
+    if (latest && latest !== snapshot && (latest.status !== job.status || latest.updated > job.updated)) {
+      return loadTaskPanel(id);
+    }
+  } catch (error) {
+    if (owner !== identity || jobPage.request !== request) return;
+    jobPage.error = error.message;
+  } finally {
+    if (owner === identity && jobPage.request === request) {
+      jobPage.request = null;
+      if (ui.route === "jobs") {
+        updateJobList();
+        renderTaskPanel();
+      }
+    }
+  }
+}
+
+function jobErrorMarkup(job, inPanel = true) {
+  const message = job.error || (job.status === "unknown" ? "暂时无法确认上游结果。" : "没有返回具体错误信息。");
+  const rejected = !job.upscaleMethod && ["模型服务拒绝了请求参数。", "模型服务拒绝了输入内容或格式。"].includes(job.error);
+  const format = job.context?.outputMethod === "native" && job.context.outputFormat;
+  const alternative = {gif: "分镜合成", svg: "矢量描摹"}[format];
+  return `<section class="job-error-detail"><h3>${inPanel && job.status === "unknown" ? "上游结果待确认" : "错误原因"}</h3><p>${esc(message)}</p>
+    ${rejected ? '<p class="meta">旧记录只保留了通用错误，无法判断是输入参数、服务线路还是内容审核导致。</p>' : ""}
+    ${!inPanel && job.requestedSize && !job.upscaleMethod ? `<p class="meta">请求尺寸 ${esc(studioSizeText(job.requestedSize))} px · ${(job.inputs || []).length} 张输入图</p>` : ""}
+    ${alternative ? `<p class="meta">当前线路的原生格式未交付。可以在 AI 生图里选择「${alternative}」单独提交新任务。</p>` : ""}
+    ${job.status === "unknown" && (!inPanel || !job.canCheckResult) ? '<p class="meta">可提供任务编号给管理员核对。平台会保留原任务记录，避免自动重复出图。</p>' : ""}</section>`;
+}
+
+function renderTaskPanel(moveFocus = false) {
+  const panel = content.querySelector(".jobs-panel");
+  if (!panel) return;
+  const body = panel.querySelector(".jobs-panel-body");
+  const id = jobPage.selected;
+  panel.hidden = !id;
+  if (!id) {
+    body.replaceChildren();
+    return;
+  }
+  const focused = body.contains(document.activeElement) ? document.activeElement : null;
+  const open = new Set(Array.from(body.querySelectorAll("details[open]"), item => item.dataset.section));
+  const job = jobPage.detail;
+  if (!job) {
+    body.innerHTML = `<p class="meta" role="status">${esc(jobPage.error || "正在读取任务详情…")}</p>
+      ${jobPage.error ? button("重试读取", "jobs-detail", id) : ""}`;
+  } else {
+    const status = job.status === "running" ? "正在处理，完成后自动保存成品。可以离开此页。" :
+      job.status === "queued" ? "任务进入队列，轮到后自动开始。" :
+      job.status === "succeeded" && !job.assetAvailable ? "成品文件已不可用。" : "";
+    const [charge, settlement] = jobCharge(job);
+    const path = job.assetAvailable ? jobAssetUrl(job.assetId) : "";
+    const dimensions = job.width && job.height ? `${job.width} × ${job.height} px` : "";
+    const checkAvailable = job.canCheckResult && job.status === "unknown";
+    body.innerHTML = `<h3 class="jobs-panel-name" tabindex="-1">${esc(job.label)}</h3>
+      <p class="jobs-panel-status">${jobBadge(job)} <span class="meta">${taskElapsed(job)}</span></p>
+      ${path ? `<figure class="jobs-output"><a href="${path}" target="_blank" rel="noopener noreferrer"><img src="${path}" alt="查看任务成品大图"></a>
+        <figcaption>已保存至我的素材 <span>${dimensions}</span></figcaption></figure>
+        <a class="btn btn-primary jobs-download" href="${path}/download">下载成品</a>` : ""}
+      ${status ? `<p class="jobs-inline-note">${status}</p>` : ""}
+      ${jobPreview(job)}
+      ${hasJobError(job) ? jobErrorMarkup(job) : job.error ? `<p class="meta">${esc(job.error)}</p>` : ""}
+      ${job.review ? `<p class="meta">${esc(job.review)}</p>` : ""}
+      ${jobPage.error ? `<p class="meta" role="status">${esc(jobPage.error)}</p>` : ""}
+      ${checkAvailable ? `<div class="stack">
+        ${button(jobPage.checking.has(id) ? "正在核对…" : "继续核对百炼结果", "check-upscale-result", id, "primary", jobPage.checking.has(id) ? "disabled" : "")}
+        <p class="meta">查询原任务，百炼结果保留 24 小时。</p></div>` : ""}
+      <dl class="jobs-facts">
+        <div><dt>类型 / 模型</dt><dd>${esc(jobKind(job))}${job.modelName ? " · " + esc(job.modelName) : ""}</dd></div>
+        <div><dt>提交时间</dt><dd>${job.created ? esc(localDate(job.created)) : "—"}</dd></div>
+        ${job.requestedSize ? `<div><dt>目标尺寸</dt><dd>${esc(studioSizeText(job.requestedSize))} px</dd></div>` : ""}
+        ${job.storyboardSize ? `<div><dt>实际分镜</dt><dd>${esc(studioSizeText(job.storyboardSize))} px</dd></div>` : ""}
+        <div><dt>费用</dt><dd>${charge}${settlement ? " · " + settlement : ""}</dd></div>
+        <div><dt>任务编号</dt><dd class="jobs-id"><code>${esc(job.id)}</code>${button("复制", "jobs-copy", job.id, "ghost", 'aria-label="复制任务编号"')}</dd></div>
+        ${job.upstreamId ? `<div><dt>上游编号</dt><dd><code>${esc(job.upstreamId)}</code></dd></div>` : ""}
+      </dl>
+      ${job.inputs?.length ? `<details data-section="inputs"><summary>查看原图与参考图</summary><div class="stack">${jobInputs(job, "jobs-detail")}</div></details>` : ""}
+      ${job.prompt ? `<details data-section="prompt"><summary>查看提示词</summary><p class="job-detail-prompt">${esc(job.prompt)}</p></details>` : ""}
+      ${job.status === "queued" ? button("取消任务", "jobs-cancel", job.id, "secondary") : ""}
+      <details data-section="actions"><summary>更多操作</summary><div class="row">${button("删除记录", "delete-live-job", job.id, "ghost")}</div></details>`;
+    for (const details of body.querySelectorAll("details")) details.open = open.has(details.dataset.section);
+  }
+  if (moveFocus || focused) {
+    const action = focused?.dataset.action;
+    let replacement = action && body.querySelector(`[data-action="${CSS.escape(action)}"]:not(:disabled)`);
+    if (focused?.matches("summary")) {
+      replacement = body.querySelector(`details[data-section="${focused.parentElement.dataset.section}"] > summary`);
+    }
+    (replacement || body.querySelector(".jobs-panel-name") || panel.querySelector("header button"))
+      ?.focus({preventScroll: true});
+  }
+  if (moveFocus && getComputedStyle(panel).position !== "sticky") panel.scrollIntoView({block: "start"});
 }
 
 function jobImage(id, label, download = false) {
-  const path = `/api/assets/${encodeURIComponent(id)}`;
+  const path = jobAssetUrl(id);
   return `<a href="${path}" target="_blank" rel="noopener noreferrer"><img loading="lazy" src="${path}" alt="${esc(label)}"></a>
     <div class="row"><a class="btn btn-ghost" href="${path}" target="_blank" rel="noopener noreferrer">查看大图</a>
     ${download ? `<a class="btn btn-ghost" href="${path}/download">下载成品</a>` : ""}</div>`;
@@ -539,6 +849,14 @@ document.querySelector("#job-detail-dialog").addEventListener("close", event => 
   }
 });
 
+function jobInputs(job, sourceAction = "job-detail") {
+  return (job.inputs || []).map((item, index) => `<div class="job-detail-image stack">
+    <strong>${esc(item.name)}</strong>
+    ${item.available ? jobImage(item.id, index === 0 ? "输入原图" : "参考图") :
+      `<p class="meta">${item.trashed ? "素材在回收站，可在「我的素材」恢复。" : "素材文件已不可用。"}</p>`}
+    ${item.jobId ? button("查看来源任务", sourceAction, item.jobId, "ghost") : ""}</div>`).join("");
+}
+
 function renderJobDetail(dialog, job) {
   dialog.dataset.jobId = job.id;
   dialog.dataset.updated = `${job.status}:${job.updated}`;
@@ -549,15 +867,8 @@ function renderJobDetail(dialog, job) {
     job.price ? (job.status === "unknown" ? `${points(job.price)} 积分仍在预留，尚未结算。` :
       ["failed", "cancelled"].includes(job.status) ? "预留积分已释放。" :
       `${points(job.price)} 积分${job.status === "succeeded" ? "已结算" : "已预留"}。`) : "";
-  const inputs = (job.inputs || []).map((item, index) => `<div class="job-detail-image stack">
-    <strong>${esc(item.name)}</strong>
-    ${item.available ? jobImage(item.id, index === 0 ? "输入原图" : "参考图") :
-      `<p class="meta">${item.trashed ? "素材在回收站，可在「我的素材」恢复。" : "素材文件已不可用。"}</p>`}
-    ${item.jobId ? button("查看来源任务", "job-detail", item.jobId, "ghost") : ""}</div>`).join("");
+  const inputs = jobInputs(job);
   const error = hasJobError(job);
-  const errorMessage = job.error || (job.status === "unknown" ? "暂时无法确认上游结果。" : "没有返回具体错误信息。");
-  const nativeFormat = job.context?.outputMethod === "native" && job.context.outputFormat;
-  const alternative = {gif: "分镜合成", svg: "矢量描摹"}[nativeFormat];
   const images = `<div class="job-detail-images">
       <section class="stack"><h3>原图与参考图</h3>${inputs || '<p class="meta">此任务没有输入图片。</p>'}</section>
       <section class="stack"><h3>成品</h3>${job.requestedSize ? `<p class="meta">目标 ${esc(studioSizeText(job.requestedSize))} px${job.width && job.height ? ` · 实际 ${job.width} × ${job.height} px` : ""}</p>` : ""}
@@ -568,9 +879,7 @@ function renderJobDetail(dialog, job) {
     ${button("关闭", "close-job-detail", "", "ghost")}</header>
     <div class="stack job-detail-body"><div><p>${jobProgress(job)} · ${esc(job.modelName)}</p>
     <p class="meta">${esc(statuses[job.status] || "")} ${esc(billing)}</p>
-    ${error ? `<section class="job-error-detail"><h3>错误原因</h3><p>${esc(errorMessage)}</p>
-      ${alternative ? `<p class="meta">当前线路的原生格式未交付。可以在 AI 生图里选择「${alternative}」单独提交新任务。</p>` : ""}
-      ${job.status === "unknown" ? '<p class="meta">可提供下方编号给管理员核对。平台会保留原任务记录，避免自动重复出图。</p>' : ""}</section>` : job.error ? `<p>${esc(job.error)}</p>` : ""}
+    ${error ? jobErrorMarkup(job, false) : job.error ? `<p>${esc(job.error)}</p>` : ""}
     ${job.review ? `<p class="meta">${esc(job.review)}</p>` : ""}
     <p class="meta">任务编号 ${esc(job.id)}${job.upstreamId ? ` · 上游编号 ${esc(job.upstreamId)}` : ""}</p></div>
     ${job.canCheckResult ? `<div>${button("继续核对百炼结果", "check-upscale-result", job.id)}<p class="meta">查询原任务，百炼结果保留 24 小时。</p></div>` : ""}
@@ -580,49 +889,142 @@ function renderJobDetail(dialog, job) {
 
 async function checkUpscaleResult(id) {
   const dialog = document.querySelector("#job-detail-dialog");
-  const control = dialog.querySelector('[data-action="check-upscale-result"]');
+  const inPanel = !dialog.open && ui.route === "jobs" && jobPage.selected === id;
+  if (jobPage.checking.has(id)) return;
+  jobPage.checking.add(id);
+  const control = (inPanel ? content : dialog).querySelector('[data-action="check-upscale-result"]');
   if (control) control.disabled = true;
   const owner = identity;
+  const snapshot = live.jobs.find(job => job.id === id);
+  if (inPanel) {
+    jobPage.error = "";
+    control?.closest(".jobs-panel-body").querySelector(".jobs-panel-name")?.focus({preventScroll: true});
+    renderTaskPanel();
+  }
   try {
     const {job} = await api(`jobs/${encodeURIComponent(id)}/check-upscale`, "POST", {});
     if (owner !== identity) return;
+    if (inPanel && jobPage.selected === id) {
+      jobPage.detail = job;
+      jobPage.request = null;
+    }
     if (dialog.open && dialog.dataset.jobId === id) renderJobDetail(dialog, job);
     scheduleJobs(0);
+  } catch (error) {
+    if (owner !== identity) return;
+    if (inPanel && jobPage.selected === id) jobPage.error = error.message;
+    else throw error;
   } finally {
-    if (control?.isConnected) control.disabled = false;
+    if (identity === owner) {
+      jobPage.checking.delete(id);
+      if (control?.isConnected) control.disabled = false;
+      if (inPanel && ui.route === "jobs" && jobPage.selected === id) {
+        renderTaskPanel();
+        const latest = live.jobs.find(item => item.id === id);
+        if (latest && latest !== snapshot && (latest.status !== jobPage.detail?.status ||
+            latest.updated > jobPage.detail?.updated || latest.previewVersion !== jobPage.detail?.previewVersion)) {
+          loadTaskPanel(id);
+        }
+      }
+    }
   }
 }
 
-function displayUpscaleSettings(result) {
-  const panel = accountDialog.querySelector("#account-upscale");
-  if (!panel) return;
-  panel.querySelector("[data-upscale-local-status]").textContent = result.localReady ? "本地 Real-ESRGAN 已就绪。" : "需要安装本地 Real-ESRGAN。";
-  panel.querySelector("[data-upscale-cloud-status]").textContent =
-    `阿里云万相超分 · ${result.model} · ${result.configured ? "已保存 API Key" : "待填写 API Key"}`;
+function upscaleSettingsView() {
+  return `<div class="upscale-settings" data-upscale-settings>
+    <div class="upscale-settings-status"><p class="meta" data-upscale-load role="status">正在读取超分设置…</p>
+      ${button("刷新状态", "refresh-upscale-settings", "", "ghost")}</div>
+    <section class="upscale-setting-card">
+      <header><div><h3>本地 Real-ESRGAN</h3><p class="meta">使用本机显卡放大，图片在本地处理。</p></div><span class="setting-state" data-upscale-local-status>检查中</span></header>
+      <p class="meta" data-upscale-local-install hidden>在项目文件夹运行「安装可选本地超分.cmd」，安装后点「刷新状态」。</p>
+      <a data-upscale-engine-link class="btn btn-ghost" target="_blank" rel="noopener noreferrer" hidden>查看引擎下载</a>
+    </section>
+    <section class="upscale-setting-card">
+      <header><div><h3>阿里云万相超分</h3><p class="meta">使用当前账号保存的北京地域 API Key，由对应百炼账号结算。</p></div><span class="setting-state" data-upscale-cloud-status>检查中</span></header>
+      <form class="stack" id="upscale-settings-form" hidden>
+        <label class="field">北京地域 API Key<input class="input" name="key" type="password" autocomplete="off" maxlength="4096" required></label>
+        <div class="setting-actions"><button class="btn btn-primary">保存 API Key</button>
+          ${button("移除 API Key", "clear-upscale-key", "", "ghost", 'data-upscale-key-remove hidden')}
+          <a data-upscale-key-link class="btn btn-ghost" target="_blank" rel="noopener noreferrer">前往百炼获取 API Key ↗</a></div>
+        <p class="status-line" role="status"></p>
+      </form>
+    </section>
+  </div>`;
+}
+
+function displayUpscaleSettings(result, panel) {
+  const local = panel.querySelector("[data-upscale-local-status]");
+  local.textContent = result.localReady ? "已就绪" : "未安装";
+  local.dataset.ready = String(result.localReady);
+  const cloud = panel.querySelector("[data-upscale-cloud-status]");
+  cloud.textContent = result.configured ? "已配置" : "未配置";
+  cloud.dataset.ready = String(result.configured);
+  panel.querySelector("form").hidden = false;
   panel.querySelector("[data-upscale-key-remove]").hidden = !result.configured;
   panel.querySelector("[data-upscale-local-install]").hidden = result.localReady;
   const key = panel.querySelector("[data-upscale-key-link]");
   key.href = result.keyUrl;
-  key.hidden = false;
   const engine = panel.querySelector("[data-upscale-engine-link]");
   engine.href = result.engineUrl;
   engine.hidden = result.localReady;
 }
 
 async function refreshUpscaleSettings() {
+  const panel = (upscaleDialog.open ? upscaleDialog : content).querySelector("[data-upscale-settings]");
+  if (!panel) return;
   const owner = identity;
-  const result = await api("profile/upscale");
-  if (owner === identity) displayUpscaleSettings(result);
+  const message = panel.querySelector("[data-upscale-load]");
+  const refresh = panel.querySelector('[data-action="refresh-upscale-settings"]');
+  if (refresh.disabled) return;
+  const form = panel.querySelector("form");
+  const controls = [refresh, ...form.querySelectorAll("button")];
+  for (const control of controls) control.disabled = true;
+  message.textContent = "正在读取超分设置…";
+  try {
+    const result = await api("profile/upscale");
+    if (owner !== identity || !panel.isConnected) return;
+    displayUpscaleSettings(result, panel);
+    message.textContent = "";
+  } catch (error) {
+    if (owner === identity && panel.isConnected) message.textContent = error.message || "读取失败，请刷新状态。";
+  } finally {
+    for (const control of controls) control.disabled = false;
+  }
 }
 
-async function clearUpscaleKey() {
-  const form = accountDialog.querySelector("#upscale-settings-form");
+async function saveUpscaleSettings(form, data) {
+  if (form.dataset.saving) return;
+  const panel = form.closest("[data-upscale-settings]");
   const owner = identity;
-  const result = await api("profile/upscale", "PUT", {clear: true});
-  if (owner !== identity || !form.isConnected) return;
-  form.reset();
-  displayUpscaleSettings(result);
-  form.querySelector('[role="status"]').textContent = "已移除。";
+  const controls = [...Array.from(form.querySelectorAll("button")), panel.querySelector('[data-action="refresh-upscale-settings"]')];
+  const key = form.elements.key;
+  form.dataset.saving = "true";
+  key.readOnly = true;
+  for (const control of controls) control.disabled = true;
+  const status = form.querySelector('[role="status"]');
+  status.textContent = data.clear ? "正在移除…" : "正在保存…";
+  try {
+    const result = await api("profile/upscale", "PUT", data);
+    if (owner !== identity || !form.isConnected) return;
+    form.reset();
+    displayUpscaleSettings(result, panel);
+    status.textContent = data.clear ? "已移除。" : "已保存。";
+  } catch (error) {
+    if (owner === identity && form.isConnected) status.textContent = error.message;
+  } finally {
+    delete form.dataset.saving;
+    key.readOnly = false;
+    for (const control of controls) control.disabled = false;
+  }
+}
+
+function clearUpscaleKey() {
+  const form = (upscaleDialog.open ? upscaleDialog : content).querySelector("#upscale-settings-form");
+  if (!form) return;
+  const owner = identity;
+  openModal("移除百炼 API Key？", "移除后，本账号需要重新配置才可提交万相超分或继续查询历史结果。",
+    "建议先等当前百炼任务处理完成。", "移除 API Key",
+    () => owner === identity && form.isConnected && saveUpscaleSettings(form, {clear: true}));
 }
 
 function resetDeck() {
@@ -640,16 +1042,221 @@ function resetDeck() {
   ppt.generationId = crypto.randomUUID();
 }
 
+function applyAdjustedPptOutline(ppt, outline, origins) {
+  const previous = pptPlan(ppt);
+  ppt.outline = outline;
+  reconcilePptPages(ppt, previous, ppt.structure || ppt.agenda ? undefined : origins);
+}
+
 const pptResolutions = {"1024x576": "1024 × 576", "1280x720": "1280 × 720",
   "1920x1080": "1920 × 1080", "2560x1440": "2560 × 1440", "3840x2160": "3840 × 2160"};
 function pptPageEdit(index = state.ppt.active) {
   return ((state.ppt.pageEdits ||= {})[index] ||= {});
 }
 
-function pptPrompt(ppt, index) {
-  const [title, detail] = ppt.outline[index];
-  const style = workspacePptTemplates.visualGuide(ppt.style);
-  return `制作 16:9 中文演示文稿第 ${index + 1} 页。全套视觉风格：${style}。页标题：${title}。本页内容和布局：${detail}。如大纲提及其他模板、配色或字体，视觉风格以当前所选模板为准，保留本页结构和业务内容。以一个核心结论组织画面，标题、数据与标签清晰。技术页完整保留已确认的节点、分层、箭头方向和业务关系。保持画面留白与安全边距，不添加无来源的文字和数字。`;
+// The confirmed page order is reused for image jobs and PPT export.
+function pptPlan(ppt) {
+  const rows = ppt.outline.map(([title, detail, layout, , number], index) => ({title, detail: detail || "",
+    layout: layout || (index === 0 ? "cover" : "points"), source: index, number}));
+  const addAgenda = ppt.agenda ?? ppt.structure;
+  if (!rows.length || (!ppt.structure && !addAgenda)) return rows;
+  const legacyStructure = ppt.structure && ppt.agenda === undefined;
+  const isAgenda = row => row.layout === "agenda" || /^(目录|内容提要|议程)$/.test(row.title.trim());
+  const existingAgenda = rows.filter(isAgenda);
+  if (!ppt.structure && existingAgenda.length) return rows;
+  const cover = rows[0].layout === "cover" ? rows.shift() : legacyStructure ? {title: rows[0].title, detail: "", layout: "cover"} : null;
+  const last = rows.at(-1);
+  const closing = last && (last.layout === "closing" || /^(结尾|结束语|谢谢|感谢聆听|答疑|Q&A)$/i.test(last.title.trim()))
+    ? {...rows.pop(), layout: "closing"} : legacyStructure ? {title: "总结与交流", detail: "谢谢聆听，欢迎提问。", layout: "closing"} : null;
+  const chapters = [];
+  const hasBoundaries = rows.some(row => row.layout === "section" || ppt.outline[row.source][3]?.trim());
+  const groupSize = Math.max(1, Math.ceil(rows.length / 4));
+  for (const row of rows) {
+    if (isAgenda(row)) continue;
+    const explicit = ppt.outline[row.source][3]?.trim();
+    const current = chapters.at(-1);
+    if (row.layout === "section") {
+      chapters.push({heading: explicit || row.title, divider: row, pages: []});
+      continue;
+    }
+    if (!current || explicit || (!hasBoundaries && current.pages.length >= groupSize)) {
+      chapters.push({heading: explicit || row.title, pages: []});
+    }
+    chapters.at(-1).pages.push(row);
+  }
+  const numbered = chapters.map((chapter, i) => ({...chapter, number: String(i + 1).padStart(2, "0")}));
+  const agendaItems = numbered.map(chapter => `${chapter.number}  ${chapter.heading}`);
+  if (closing) agendaItems.push("结尾  " + closing.title);
+  const agenda = legacyStructure ? [] : [...existingAgenda];
+  for (let i = 0; addAgenda && (legacyStructure || !existingAgenda.length) && i < agendaItems.length; i += 5) {
+    agenda.push({title: i ? `目录（续 ${i / 5 + 1}）` : "目录", detail: agendaItems.slice(i, i + 5).join("\n"), layout: "agenda"});
+  }
+  const content = ppt.structure ? numbered.flatMap(({heading, number, pages, divider}) => [
+    {...(divider || {}), title: heading, detail: divider?.detail || "", layout: "section", number}, ...pages
+  ]) : rows;
+  return [cover, ...agenda, ...content, closing].filter(Boolean);
+}
+
+function pptPlanReady(ppt) {
+  const plan = pptPlan(ppt);
+  if (!plan.length || plan.some(page => !page.title.trim())) return notify("请填写每一页的标题。"), false;
+  if (plan.length > 60) return notify("当前安排超过 60 页，请减少页面后再生成。"), false;
+  return true;
+}
+
+function initialPptOutline(outline) {
+  const rows = outline.map(([title, detail, layout, ...rest], index) => [
+    title, detail, layout || (index === 0 ? "cover" : "points"), ...rest
+  ]);
+  const cover = rows.findIndex(row => row[2] === "cover");
+  if (cover > 0) rows.unshift(...rows.splice(cover, 1));
+  if (cover < 0 && rows.length < 24) rows.unshift([rows[0][0], "", "cover"]);
+  const closing = rows.findLastIndex(([title, , layout]) => layout === "closing" || (layout !== "cover" &&
+    /^(结尾|结束页|结束语|谢谢|谢谢聆听|感谢聆听|感谢观看|答疑|交流与提问|Q\s*&\s*A)[！!。\s]*$/i.test(title.trim())));
+  if (closing >= 0) {
+    const [last] = rows.splice(closing, 1);
+    last[2] = "closing";
+    rows.push(last);
+  } else if (rows.at(-1)[2] !== "closing" && rows.length < 24) {
+    rows.push(["感谢聆听", "欢迎交流与提问", "closing"]);
+  }
+  return rows;
+}
+
+function reconcilePptPages(ppt, previous, origins) {
+  const plan = pptPlan(ppt);
+  const signature = ({title, detail, layout, number}) => JSON.stringify([title.trim(), detail.trim(), layout, number || ""]);
+  const oldKeys = previous.map(signature);
+  const newKeys = plan.map(signature);
+  if (oldKeys.length === newKeys.length && newKeys.every((key, index) => key === oldKeys[index] &&
+    (!origins || origins[index] === index))) return;
+
+  if (!origins) {
+    const available = new Map();
+    oldKeys.forEach((key, index) => {
+      if (!available.has(key)) available.set(key, []);
+      available.get(key).push(index);
+    });
+    origins = newKeys.map(key => available.get(key)?.shift());
+  }
+  const keep = (index, origin) => newKeys[index] === oldKeys[origin];
+  for (const [images, history] of [["boards", "boardHistory"], ["pages", "history"]]) {
+    const oldImages = ppt[images] || [];
+    const oldHistory = ppt[history] || {};
+    ppt[images] = origins.map((origin, index) => keep(index, origin) ? oldImages[origin] || null : null);
+    ppt[history] = Object.fromEntries(origins.flatMap((origin, index) => {
+      const versions = [...(oldHistory[origin] || []), ...(!keep(index, origin) && oldImages[origin] ? [oldImages[origin]] : [])];
+      return versions.length ? [[index, [...new Set(versions)]]] : [];
+    }));
+  }
+  for (const key of ["pageEdits", "textboxes"]) {
+    const old = ppt[key] || {};
+    ppt[key] = Object.fromEntries(origins.flatMap((origin, index) =>
+      keep(index, origin) && old[origin] ? [[index, old[origin]]] : []));
+  }
+  // Jobs carry the old page index. Late results stay in the asset library.
+  ppt.generationId = crypto.randomUUID();
+  ppt.tracked = [];
+  delete ppt.manualJobSkips;
+  const active = origins.indexOf(ppt.active);
+  ppt.active = active < 0 ? Math.min(ppt.active, plan.length - 1) : active;
+  if (ppt.maxStage === 3 && ppt.pages.some(id => !id)) ppt.maxStage = 2;
+}
+
+function saveStoryboardPage(ppt, index, row, insert = false) {
+  const previous = pptPlan(ppt);
+  const origins = previous.map((_, i) => i);
+  const outline = previous.map(({title, detail, layout, source, number}) =>
+    [title, detail, layout, ppt.outline[source]?.[3] || "", number || ""]);
+  outline.splice(index, insert ? 0 : 1, ...(row ? [row] : []));
+  if (insert) origins.splice(index, 0, undefined);
+  else if (!row) origins.splice(index, 1);
+  ppt.outline = outline;
+  // The storyboard now includes its explicit directory and section pages.
+  ppt.structure = false;
+  ppt.agenda = false;
+  reconcilePptPages(ppt, previous, origins);
+  ppt.active = Math.min(index, outline.length - 1);
+  delete ppt.refineProposal;
+  save();
+  render();
+}
+
+function canEditStoryboard(ppt) {
+  return state.ppt === ppt && ppt.stage === 2 && (!ppt.documentId || ui.imageRecordsLoaded) &&
+    !scopeInProgress("ppt") && !ui.uploading && !ui.pptExport;
+}
+
+function openStoryboardPage(insert = false) {
+  const ppt = state.ppt;
+  if (!canEditStoryboard(ppt)) return;
+  const plan = pptPlan(ppt);
+  const index = ppt.active;
+  const page = plan[index];
+  if (insert && plan.length >= 60) return notify("已达到 60 页上限。");
+  const dialog = document.createElement("dialog");
+  dialog.setAttribute("aria-labelledby", "ppt-storyboard-edit-title");
+  dialog.innerHTML = `<form class="stack">
+    <h2 id="ppt-storyboard-edit-title">${insert ? "添加页面" : "编辑第 " + (index + 1) + " 页"}</h2>
+    ${insert ? `<label class="field">插入位置<select class="input" name="position">
+      <option value="before" ${page.layout === "closing" ? "selected" : ""}>第 ${index + 1} 页之前</option>
+      <option value="after" ${page.layout !== "closing" ? "selected" : ""}>第 ${index + 1} 页之后</option>
+    </select></label>` : ""}
+    <label class="field">页标题<input class="input" name="title" maxlength="120" value="${insert ? "" : esc(page.title)}" required autofocus></label>
+    <label class="field">本页正文<textarea class="textarea" name="detail" rows="6" maxlength="2000">${insert ? "" : esc(page.detail)}</textarea></label>
+    <label class="field">页型<select class="input" name="layout">${Object.entries(pptLayouts).map(([key, label]) =>
+      `<option value="${key}" ${key === (insert ? "points" : page.layout) ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+    <p role="status" class="meta"></p>
+    <div class="row"><button type="button" class="btn btn-secondary" data-close>取消</button><button class="btn btn-primary">保存页面</button></div></form>`;
+  const form = dialog.querySelector("form");
+  form.querySelector("[data-close]").onclick = () => dialog.close();
+  form.onsubmit = event => {
+    event.preventDefault();
+    if (!canEditStoryboard(ppt) || ppt.active !== index) return dialog.close();
+    const {title, detail, layout, position} = Object.fromEntries(new FormData(form));
+    if (!title.trim()) {
+      form.querySelector('[role="status"]').textContent = "请填写页标题。";
+      return;
+    }
+    const target = index + Number(insert && position === "after");
+    const row = [title.trim(), detail.trim(), layout, !insert && ppt.outline[page.source]?.[3] || "",
+      !insert && layout === "section" ? page.number || "" : ""];
+    dialog.close();
+    saveStoryboardPage(ppt, target, row, insert);
+  };
+  dialog.addEventListener("close", () => dialog.remove(), {once: true});
+  document.body.append(dialog);
+  dialog.showModal();
+}
+
+function removeStoryboardPage() {
+  const ppt = state.ppt;
+  if (!canEditStoryboard(ppt)) return;
+  const index = ppt.active;
+  const plan = pptPlan(ppt);
+  if (plan.length <= 1) return notify("请至少保留一页。");
+  openModal(`删除第 ${index + 1} 页？`, plan[index].title,
+    "此页将从项目和导出中移除，已有图片仍可在素材库查看。", "删除页面",
+    () => canEditStoryboard(ppt) && ppt.active === index && saveStoryboardPage(ppt, index, null));
+}
+
+function pptPagePrompt(ppt, index) {
+  const {title, detail, layout, number} = pptPlan(ppt)[index];
+  return `页标题：${title}\n页型：${pptLayouts[layout] || "要点"}${number ? `，显著展示章节序号 ${number}` : ""}\n已确认内容：\n${detail}`;
+}
+
+function pptImagePrompt(ppt, index, edit, hasReference, styleReference = "") {
+  const {layout} = pptPlan(ppt)[index];
+  return [
+    `制作一张 16:9 中文幻灯片成品图，第 ${index + 1} 页。正视完整画面，四周留出安全边距。`,
+    `本页视觉规范（全稿统一，优先于下文中的旧版式描述）：${workspacePptTemplates.visualGuide(ppt.style, layout)}`,
+    styleReference && `第 ${hasReference ? "2" : "1"} 张输入是模板参考图。仅借用色彩、字级、留白、构图和图表设计语言。参考图内的拼版、示例标题、旧内容、示例图片、页码和标志不要复现。输出只包含当前这一页，图形基于本页主题。`,
+    pptPagePrompt(ppt, index),
+    "用适合投屏的字级安排标题、小标题和要点。用结构、对照或图示表达内容，避免堆叠长段。准确保留已确认的名称、数值、关系和引用。避免新增事实、示例文案或水印。",
+    edit.prompt?.trim() && "单页提示：" + edit.prompt.trim(),
+    edit.change?.trim() && "本次修改要求：" + edit.change.trim(),
+    hasReference && "第 1 张输入是现有页图。沿用该页已确认的事实与未要求调整的布局。"
+  ].filter(Boolean).join("\n");
 }
 
 function compactSearchResult(result) {
@@ -753,10 +1360,11 @@ function pptLanguageRequest(ppt, model, message = "") {
   const history = previous.map(({question, reply}) => ({question: String(question || ""), reply: String(reply || "")}));
   const evidenceTurnIds = previous.filter(turn => turn.webSearch?.status === "ok" && Number.isSafeInteger(turn.evidenceTurnId))
     .slice(-4).reverse().map(turn => turn.evidenceTurnId);
+  const assetIds = pptSlots.map(key => ui.file[key]?.id).filter(Boolean);
   return {modelId: model.id, tokenRates: model.tokenRates, requestId: crypto.randomUUID(),
     sessionId: ppt.sessionId, projectId: state.activeProjectId || "",
-    brief, style: ppt.style, level: ppt.level, requirements: ppt.requirements || {}, templateGuide: workspacePptTemplates.outlineGuide(ppt.style),
-    assetIds: pptSlots.map(key => ui.file[key]?.id).filter(Boolean), history,
+    brief, level: ppt.level, requirements: ppt.requirements || {},
+    assetIds, templateAssetId: assetIds.includes(ppt.templateAssetId) ? ppt.templateAssetId : undefined, history,
     evidenceTurnIds, ...research};
 }
 
@@ -809,20 +1417,22 @@ function pptOutlineProgress(raw) {
 }
 
 function pptStreamText(reply) {
+  if (reply.adjustment) return "";
   return reply.path === "outline" ? pptOutlineProgress(reply.text) : reply.text;
 }
 
 function pptStreamPreview() {
   const reply = live.pptReply;
   if (!reply || reply.ppt !== state.ppt || (reply.index !== null && reply.index !== state.ppt.active)) return "";
-  const title = {discuss: "AI 正在回复", outline: "正在编写大纲", "revise-slide": "正在优化本页提示词"}[reply.path];
+  const title = reply.adjustment ? "正在整理页面改动" :
+    {discuss: "AI 正在回复", outline: "正在编写大纲", "revise-slide": "正在优化本页提示词"}[reply.path];
   return `<div class="ppt-stream-preview" aria-busy="true"><p class="meta job-progress" role="status"><span class="job-spinner" aria-hidden="true"></span><span data-ppt-stream-status>${esc(reply.status || title)}</span></p>
     <div data-ppt-stream-output>${esc(pptStreamText(reply) || "等待模型回复…")}</div></div>`;
 }
 
 async function pptLanguageTask(ppt, path, request, apply, index = null) {
   const owner = identity;
-  const reply = {path, ppt, index, text: ""};
+  const reply = {path, ppt, index, text: "", adjustment: path === "outline" && Boolean(request.currentOutline)};
   live.pptReply = reply;
   pending.set("ppt", path);
   render();
@@ -832,7 +1442,7 @@ async function pptLanguageTask(ppt, path, request, apply, index = null) {
     const target = ui.route === "ppt" && (index === null || ppt.active === index) && content.querySelector("[data-ppt-stream-output]");
     if (!target) return;
     const follow = target.scrollHeight - target.clientHeight - target.scrollTop < 40;
-    target.textContent = pptStreamText(reply) || "正在整理首个页面…";
+    target.textContent = pptStreamText(reply) || (reply.adjustment ? "完成后可预览并应用改动。" : "正在整理首个页面…");
     if (follow) target.scrollTop = target.scrollHeight;
   };
   const reveal = path === "outline" ? null : workspaceCommercial.revealText(paint);
@@ -899,6 +1509,174 @@ async function discussPpt(searchNow = false) {
   });
 }
 
+function pptOutlineProposal(outline, changes) {
+  const rows = outline.map((row, index) => row[2] ? row : [row[0], row[1], index === 0 ? "cover" : "points", ...row.slice(3)]);
+  const edits = new Map(changes.filter(change => change.op !== "insert").map(change => [change.page, change]));
+  const insertions = new Map();
+  for (const change of changes) {
+    if (change.op !== "insert" && change.op !== "move") continue;
+    const entries = insertions.get(change.after) || [];
+    entries.push(change.op === "insert" ? [change.slide, null] : [rows[change.page - 1], change.page - 1]);
+    insertions.set(change.after, entries);
+  }
+  const entries = [];
+  const appendAfter = page => {
+    for (const entry of insertions.get(page) || []) {
+      entries.push(entry);
+      if (entry[1] !== null) appendAfter(entry[1] + 1);
+    }
+  };
+  appendAfter(0);
+  rows.forEach((row, index) => {
+    const change = edits.get(index + 1);
+    if (change?.op === "move") return;
+    if (!change || change.op === "update") {
+      const slide = change ? [...change.slide] : row;
+      if (change && slide[3] === undefined && row[3]) slide[3] = row[3];
+      if (change && slide[2] === "section" && row[4]) slide[4] = row[4];
+      entries.push([slide, index]);
+    }
+    appendAfter(index + 1);
+  });
+  return {outline: entries.map(([slide]) => slide), origins: entries.map(([, origin]) => origin),
+    moved: changes.filter(change => change.op === "move").map(change => change.page - 1)};
+}
+
+function pptProposalPreview(rows) {
+  return rows.filter(row => row.change).map(({slide: [title, detail], index, change}) =>
+    `<article><b>${change} · ${change === "删除" ? "原" : ""}第 ${index + 1} 页 · ${esc(title)}</b>${change === "删除" ? "" : `<p>${esc(detail)}</p>`}</article>`).join("");
+}
+
+function pptProposalRows(ppt) {
+  const proposal = ppt.refineProposal;
+  if (!proposal || proposal.stamp !== JSON.stringify(ppt.outline)) return [];
+  const rows = proposal.outline.map((slide, index) => {
+    const origin = proposal.origins?.[index];
+    const old = ppt.outline[origin];
+    const original = old && [old[0], old[1], old[2] || (origin === 0 ? "cover" : "points"), old[3] || "", old[4] || ""];
+    const next = [slide[0], slide[1], slide[2] || (index === 0 ? "cover" : "points"), slide[3] || "", slide[4] || ""];
+    const change = !proposal.origins ? "修改" : !old ? "新增" : proposal.moved?.includes(origin)
+      ? "移动" : JSON.stringify(original) !== JSON.stringify(next) ? "修改" : "";
+    return {slide, index, change};
+  });
+  if (!proposal.origins) return rows;
+  const retained = new Set(proposal.origins);
+  const deleted = ppt.outline.flatMap((slide, index) =>
+    retained.has(index) ? [] : [{slide, index, change: "删除"}]);
+  for (const row of deleted.reverse()) rows.splice(row.index, 0, row);
+  return rows;
+}
+
+async function refinePptOutline(generate = false) {
+  if (!requireAccount()) return;
+  if (scopeInProgress("ppt")) return notify("请先等待当前 PPT 任务结束。");
+  const ppt = state.ppt;
+  const model = modelFor("chat", "text", ppt.languageModel).selected;
+  if (!model) return notify("请先选择可用的语言模型。");
+  const scopedPage = ui.pptRefineTarget?.ppt === ppt ? ui.pptRefineTarget.page : null;
+  const turns = (ppt.refineTurns || []).filter(turn => (turn.page ?? null) === scopedPage);
+  const draft = (scopedPage ? ui.pptRefineTarget.draft || "" : ppt.refineDraft || "").trim();
+  const message = draft || (generate ? turns.at(-1)?.question : "");
+  if (!message) return notify("请先写下希望修改的地方。");
+  const request = pptLanguageRequest(ppt, model);
+  const stamp = JSON.stringify(ppt.outline);
+  const currentOutline = ppt.outline.map(([title, detail, layout, chapter], index) => ({
+    title, detail, layout: layout || (index === 0 ? "cover" : "points"), ...(chapter ? {chapter} : {})
+  }));
+  const history = [...request.history, ...turns.map(({question, reply}) => ({question, reply}))];
+  const payload = {...request, history, currentOutline, message, ...(scopedPage ? {targetPage: scopedPage} : {})};
+  const status = message => { ui.pptRefineStatus = {ppt, message}; };
+  const send = async () => {
+    if (state.ppt !== ppt || scopeInProgress("ppt") || JSON.stringify(ppt.outline) !== stamp) {
+      return notify("大纲已变化，请根据当前页面重新提交。");
+    }
+    status("");
+    if (generate) {
+      delete ppt.refineProposal;
+      save();
+    }
+    try {
+      await pptLanguageTask(ppt, generate ? "outline" : "discuss", payload, result => {
+        if (!generate) {
+          (ppt.refineTurns ||= []).push({question: message, reply: result.reply, page: scopedPage, webSearch: compactSearchResult(result.webSearch)});
+          ppt.refineTurns = ppt.refineTurns.slice(-12);
+          if (scopedPage) ui.pptRefineTarget.draft = "";
+          else ppt.refineDraft = "";
+          status("AI 已回复。点击「生成调整稿」预览页面改动。");
+          return;
+        }
+        let {changes} = result;
+        if (!Array.isArray(changes)) {
+          // Older running services return a rewritten deck. Recover only an explicitly identified page.
+          const pageNumbers = [...message.matchAll(/第\s*(\d+)\s*页/g)].map(match => Number(match[1]));
+          const page = scopedPage || (new Set(pageNumbers).size === 1 ? pageNumbers[0] : 0);
+          const old = currentOutline[page - 1];
+          const row = result.outline?.[page - 1];
+          const structural = /新增|插入|删除|移除|挪动|移动|换序|重排|调换|增加[一两\d]+页/.test(message);
+          const otherTitlesMatch = result.outline?.every((item, index) =>
+            index === page - 1 || item[0] === currentOutline[index]?.title);
+          if (structural || !old || !row || result.outline.length !== currentOutline.length || !otherTitlesMatch) {
+            throw new Error("当前服务返回了整份大纲。请重启工作台加载新版，再生成调整稿。");
+          }
+          changes = [{op: "update", page, slide: row}];
+        }
+        if (scopedPage && changes.some(change => change.op !== "update" || change.page !== scopedPage)) {
+          throw new Error("AI 提议修改所选页以外的内容。跨页或增删请切换到「整稿沟通」。");
+        }
+        const proposal = {...pptOutlineProposal(ppt.outline, changes), stamp, webSearch: compactSearchResult(result.webSearch)};
+        if (!pptProposalRows({...ppt, refineProposal: proposal}).some(row => row.change)) {
+          status("AI 没有给出可应用的页面改动。请补充页码或明确希望替换的内容。");
+          return;
+        }
+        ppt.refineProposal = proposal;
+      });
+    } catch (error) {
+      if (state.ppt !== ppt) return;
+      status(error.message);
+    }
+    if (state.ppt !== ppt || ui.route !== "ppt") return;
+    render();
+    focusPptRefinement(ppt.refineProposal ? "[data-ppt-refine-result]" : "[data-ppt-refine-status]");
+  };
+  if (generate) return openModal("生成大纲调整稿", `${model.name} · ${tokenRateText(model)}`,
+    "保留当前大纲，先查看调整稿再决定是否应用。按实际 Token 用量结算。", "生成调整稿",
+    send);
+  await send();
+}
+
+function focusPptRefinement(selector) {
+  const target = content.querySelector(selector);
+  target?.scrollIntoView({block: "nearest"});
+  target?.focus({preventScroll: true});
+}
+
+function applyPptProposal() {
+  const ppt = state.ppt;
+  const proposal = ppt.refineProposal;
+  if (!proposal || scopeInProgress("ppt")) return;
+  if (proposal.stamp !== JSON.stringify(ppt.outline)) return notify("大纲已手动修改，请根据最新内容重新生成调整稿。");
+  const firstChanged = pptProposalRows(ppt).find(row => row.change);
+  const pageOrderChanged = !proposal.origins || proposal.origins.length !== ppt.outline.length ||
+    proposal.origins.some((origin, index) => origin !== index);
+  applyAdjustedPptOutline(ppt, proposal.outline, proposal.origins);
+  if (pageOrderChanged) {
+    const positions = new Map((proposal.origins || []).map((origin, index) => [origin, index + 1]));
+    for (const turn of ppt.refineTurns || []) {
+      if (turn.page) turn.page = positions.get(turn.page - 1) || 0;
+    }
+  }
+  if (proposal.webSearch) ppt.outlineWebSearch = proposal.webSearch;
+  delete ppt.refineProposal;
+  ppt.refineDraft = "";
+  delete ui.pptRefineTarget;
+  ui.pptRefineStatus = {ppt, message: "已应用调整稿，左侧大纲已更新。"};
+  ppt.stage = 1;
+  save();
+  render();
+  const index = Math.min(firstChanged?.index ?? 0, ppt.outline.length - 1);
+  focusPptRefinement(`[data-field="ppt-title"][data-index="${index}"]`);
+}
+
 async function revisePptPrompt() {
   if (!requireAccount()) return;
   if (pending.has("ppt")) return notify("请先等待当前操作提交或 AI 回复结束。");
@@ -909,12 +1687,12 @@ async function revisePptPrompt() {
   const edit = pptPageEdit(index);
   const change = (edit.change || "").trim();
   if (!change) return notify("先写下这一页想怎么改。");
-  const [title, detail] = ppt.outline[index];
+  const {title, detail} = pptPlan(ppt)[index];
   const request = pptLanguageRequest(ppt, model);
-  const {modelId, tokenRates, requestId, brief, style, history, webSearch, researchId, evidenceTurnIds, sessionId, projectId} = request;
+  const {modelId, tokenRates, requestId, brief, history, webSearch, researchId, evidenceTurnIds, sessionId, projectId} = request;
   await pptLanguageTask(ppt, "revise-slide", {modelId, tokenRates, requestId, brief, history, webSearch,
     researchId, evidenceTurnIds, sessionId, projectId,
-    title, detail, change, style: workspacePptTemplates.visualGuide(style), prompt: edit.prompt || pptPrompt(ppt, index)},
+    title, detail, change, style: workspacePptTemplates.visualGuide(ppt.style, pptPlan(ppt)[index].layout), prompt: edit.prompt || pptPagePrompt(ppt, index)},
   result => { edit.suggestion = result.prompt; edit.webSearch = compactSearchResult(result.webSearch); }, index);
 }
 
@@ -931,8 +1709,10 @@ async function makeOutline() {
     "将需求、资料和适用的联网来源交给模型整理。按实际 Token 用量结算。", "生成大纲", async () => {
       if (owner !== identity || state.ppt !== ppt || scopeInProgress("ppt")) return;
       await pptLanguageTask(ppt, "outline", request, result => {
-        resetDeck();
-        ppt.outline = result.outline;
+        applyAdjustedPptOutline(ppt, initialPptOutline(result.outline));
+        delete ppt.refineProposal;
+        ppt.refineTurns = [];
+        ppt.refineDraft = "";
         ppt.outlineWebSearch = compactSearchResult(result.webSearch);
         ppt.stage = ppt.maxStage = 1;
       });
@@ -941,50 +1721,69 @@ async function makeOutline() {
 
 function adoptPptBoards() {
   const ppt = state.ppt;
+  if (ppt.stage !== 2) return;
   if (scopeInProgress("ppt")) return notify("请先等待当前 PPT 任务结束。");
-  if (!ppt.outline.every((_, index) => visualExists(ppt.boards[index]))) return notify("请先补齐分镜。");
-  const fill = ppt.outline.map((_, index) => visualExists(ppt.pages[index]) ? ppt.pages[index] : ppt.boards[index]);
-  ppt.pages = fill;
+  const plan = pptPlan(ppt);
+  if (!pptPlanReady(ppt)) return;
+  if (!plan.every((_, index) => visualExists(ppt.boards[index]))) return notify("请先补齐全部分镜图。");
+  ppt.pages = plan.map((_, index) => visualExists(ppt.pages[index]) ? ppt.pages[index] : ppt.boards[index]);
   ppt.stage = ppt.maxStage = 3;
   save();
   render();
+  window.scrollTo(0, 0);
 }
 
 function buildPptPages(phase) {
   const ppt = state.ppt;
-  if (ppt.outline.some(([title]) => !title.trim())) return notify("请填写每一页的标题。");
+  if (ppt.stage === 1 && ppt.refineProposal?.stamp === JSON.stringify(ppt.outline)) {
+    return notify("请先应用或放弃当前调整稿。");
+  }
+  if (!pptPlanReady(ppt)) return;
+  const plan = pptPlan(ppt);
   const board = phase === "board" || phase === "board-redo";
   const single = phase === "redo" || phase === "board-redo";
+  if ((!board && ppt.stage !== 3) || (board && (ppt.stage < 1 || ppt.stage > 2))) return;
   const batch = board ? ppt.boards : ppt.pages;
-  const wanted = single ? [ppt.active] : ppt.outline.map((_, index) => index).filter(index => !visualExists(batch[index]));
+  const wanted = single ? [ppt.active] : plan.map((_, index) => index).filter(index => !visualExists(batch[index]));
   const running = new Set(live.allJobs.filter(job => activeJob(job) && job.scope === "ppt" &&
     job.context?.documentId === ppt.documentId && job.context.generationId === ppt.generationId &&
     (job.context.phase === "board") === board).map(job => job.context.index));
-  const indexes = wanted.filter(index => !running.has(index));
+  const remaining = wanted.filter(index => !running.has(index));
+  const indexes = remaining.slice(0, 12);
   if (wanted.length && !indexes.length) return notify("所选页面已提交，可在「生成任务」查看。");
   const size = Object.hasOwn(pptResolutions, ppt.resolution) ? ppt.resolution : "1920x1080";
   if (!indexes.length) {
     ppt.stage = board ? 2 : 3;
+    ppt.maxStage = Math.max(ppt.maxStage, ppt.stage);
     save();
     render();
     return;
   }
   const model = modelFor("image", "generate", ppt.model).selected;
-  const keepLayout = modelFor("image", "reference", model?.id).options.some(item => item.id === model?.id);
+  const supportsReference = model?.capabilities.includes("reference") && model.maxReferences >= 1;
+  const supportsBoth = supportsReference && model.capabilities.includes("multiReference") && model.maxReferences >= 2;
+  const template = workspacePptTemplates.referenceKey(ppt.style);
   const requests = indexes.map(index => {
-    const edit = pptPageEdit(index);
-    const existing = [batch[index], !board ? ppt.boards[index] : null].find(visualExists);
-    const prompt = (edit.prompt?.trim() || pptPrompt(ppt, index)) +
-      (edit.change?.trim() ? "\n本次修改要求：" + edit.change.trim() : "") +
-      (existing && keepLayout ? "\n沿用参考页未要求修改的布局和内容。" : "");
+    const edit = ppt.pageEdits?.[index] || {};
+    const history = (board ? ppt.boardHistory : ppt.history)?.[index] || [];
+    const existing = [batch[index], !board ? ppt.boards[index] : null, ...[...history].reverse()].find(visualExists);
+    const source = supportsReference ? existing : null;
+    const styleReference = supportsReference && (!source || supportsBoth) ? template : "";
+    const prompt = pptImagePrompt(ppt, index, edit, source, styleReference);
     return {label: `PPT ${board ? "分镜" : "成稿"} · 第 ${index + 1} 页`, prompt,
-      size, imageIds: existing && keepLayout ? [existing] : [],
-      context: {index, phase: board ? "board" : phase, regenerate: single}};
+      size, imageIds: source ? [source] : [],
+      context: {index, phase: board ? "board" : phase, regenerate: single, ...(styleReference ? {pptStyleReference: styleReference} : {})}};
   });
   return confirmImages("ppt", model, requests, () => {
     ppt.stage = board ? 2 : 3;
     ppt.maxStage = Math.max(ppt.maxStage, ppt.stage);
-  }, null, `目标 ${pptResolutions[size]} px${requests.some(item => item.imageIds.length) ? " · 参考已有页" : single ? " · 按提示词重出" : ""}`);
+    if (board && !single && ui.route === "ppt") window.scrollTo(0, 0);
+  }, null, [
+    `目标 ${pptResolutions[size]} px`,
+    remaining.length > 12 && `本批 12 页，另有 ${remaining.length - 12} 页待提交`,
+    requests.some(item => item.imageIds.length) && "参考已有页",
+    requests.some(item => item.context.pptStyleReference) ? "随分镜发送模板参考图" : template && "按模板文字规则出图"
+  ].filter(Boolean).join(" · "));
 }
 
 async function confirmImageTool(name, args, model, options = {}) {
@@ -1097,7 +1896,10 @@ function uploadPptPageImage() {
     } catch (error) {
       notify(error.message);
     } finally {
-      if (owner === identity) ui.uploading = false;
+      if (owner === identity) {
+        ui.uploading = false;
+        if (ui.route === "ppt" && state.ppt === ppt) render();
+      }
     }
   }, {once: true});
   input.click();
@@ -1277,9 +2079,9 @@ function pptExportStatus(ppt) {
     ${result.reviewPages ? `<p class="meta">第 ${esc(result.reviewPages)} 页有文字保留在底图，可圈选补充。</p>` : ""}</div>`;
 }
 
-const pptLayouts = {cover: "封面", section: "章节", points: "要点", comparison: "对照", process: "流程", closing: "结尾"};
+const pptLayouts = {cover: "封面", agenda: "目录", section: "章节", points: "要点", comparison: "对照", process: "流程", closing: "结尾"};
 
-function parsePptOutline(value) {
+function parsePptOutline(value, maxPages = 24) {
   const pages = [];
   for (const line of value.replaceAll("\r", "").split("\n")) {
     const heading = /^#{1,3}\s+(.+?)\s*$/.exec(line);
@@ -1290,7 +2092,7 @@ function parsePptOutline(value) {
     else if (pages.length) pages[pages.length - 1][1] += line + "\n";
     else if (line.trim()) throw new Error("请用 # 页标题 开始每一页，再填写正文。");
   }
-  if (!pages.length || pages.length > 24) throw new Error("请提供 1 至 24 页大纲，用 # 页标题 分隔。");
+  if (!pages.length || pages.length > maxPages) throw new Error(`请提供 1 至 ${maxPages} 页大纲，用 # 页标题 分隔。`);
   pages.forEach(([title, detail], index) => {
     if (title.length > 120 || detail.trim().length > 2000) throw new Error(`第 ${index + 1} 页过长：标题最多 120 字，正文最多 2000 字，请拆页。`);
     if (!detail.trim()) throw new Error(`请补充第 ${index + 1} 页正文。`);
@@ -1303,22 +2105,25 @@ function openManualPptOutline() {
   if (!requireAccount(openManualPptOutline)) return;
   if (pending.has("ppt") || scopeInProgress("ppt") || ui.pptExport) return notify("请等待当前 PPT 任务结束。");
   const ppt = state.ppt, owner = identity;
+  const maxPages = ppt.outline.length > 24 ? 60 : 24;
   const dialog = document.createElement("dialog");
   dialog.className = "ppt-manual-outline";
   dialog.setAttribute("aria-labelledby", "ppt-manual-title");
   dialog.innerHTML = `<form class="stack"><h2 id="ppt-manual-title">整理已有大纲</h2>
-    <p class="meta">每页以「# 页标题」开始，下一行填写正文。支持 1 至 24 页，内容只在本地整理。</p>
+    <p class="meta">每页以「# 页标题」开始，下一行填写正文。支持 1 至 ${maxPages} 页。</p>
     <label class="field">逐页内容<textarea class="textarea" name="outline" rows="15" maxlength="52000" placeholder="# 项目阶段汇报&#10;面向部门负责人，确认本阶段结果与下一步安排。&#10;&#10;# 当前进展&#10;填写已确认的结果和依据。" required>${esc(ppt.outline.map(([title, detail]) => `# ${title}\n${detail}`).join("\n\n"))}</textarea></label>
-    ${ppt.outline.length ? '<p class="meta">应用后替换当前大纲和页面安排；已生成图片仍保留在素材库。</p>' : ""}
+    ${ppt.outline.length ? '<p class="meta">应用后按新大纲安排页面。保留内容和页型相同的分镜。</p>' : ""}
     <p class="status-line" role="status"></p><div class="row"><button type="button" class="btn btn-secondary" data-close>取消</button><button class="btn btn-primary">应用大纲</button></div></form>`;
   dialog.querySelector("[data-close]").onclick = () => dialog.close();
   dialog.querySelector("form").onsubmit = event => {
     event.preventDefault();
     if (owner !== identity || state.ppt !== ppt) return dialog.close();
     try {
-      const outline = parsePptOutline(dialog.querySelector("textarea").value);
-      resetDeck();
-      ppt.outline = outline;
+      const outline = parsePptOutline(dialog.querySelector("textarea").value, maxPages);
+      applyAdjustedPptOutline(ppt, ppt.outline.length ? outline : initialPptOutline(outline));
+      delete ppt.refineProposal;
+      ppt.refineTurns = [];
+      ppt.refineDraft = "";
       ppt.stage = ppt.maxStage = 1;
       save();
       dialog.close();
@@ -1333,14 +2138,14 @@ function openManualPptOutline() {
 async function savePpt(editable, native = false) {
   if (!requireAccount()) return;
   const ppt = state.ppt;
-  if (ui.pptExport) return;
-  const slides = native ? ppt.outline.map(([title, detail, layout], index) => ({title, detail, layout: layout || (index === 0 ? "cover" : "points")})) : ppt.outline.map(([title], index) => ({
+  if (ui.pptExport || (native ? ppt.stage < 1 : ppt.stage !== 3) || !pptPlanReady(ppt)) return;
+  const plan = pptPlan(ppt);
+  const slides = native ? plan.map(({title, detail, layout, number}) => ({title, detail, layout, number})) : plan.map(({title}, index) => ({
     title, assetId: ppt.pages[index], textboxes: editable ? ppt.textboxes[index] || [] : [],
     preserveImage: editable && ppt.pageEdits?.[index]?.preserveImage === true
   }));
   if (!slides.length) return notify("请先确认大纲。");
-  if (native && slides.some(slide => !slide.title?.trim() || !slide.detail?.trim())) return notify("请填写每一页的标题和正文后导出。");
-  if (!native && slides.some(slide => !visualExists(slide.assetId))) return notify("请先补齐全部成稿。");
+  if (!native && plan.some((_, index) => !visualExists(ppt.pages[index]))) return notify("请先补齐全部成稿图片。");
   if (editable && slides.every(slide => slide.preserveImage)) return notify("所有页面均设为保留原图。取消至少一页的设置，或直接导出原图。");
   const owner = identity;
   const title = slides[0].title || "演示文稿";

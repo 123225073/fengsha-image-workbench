@@ -39,7 +39,16 @@
   </nav>
   <div class="sidebar-footer">
     <a href="/admin" data-nav="admin" id="admin-nav" hidden><span class="nav-mark" aria-hidden="true">⚙</span>后台设置</a>
-    <button type="button" class="sidebar-account" data-action="open-account" aria-haspopup="dialog" aria-controls="account-dialog"><span id="sidebar-avatar" class="avatar" aria-hidden="true">访</span><span class="sidebar-account-copy"><b id="sidebar-name">访客体验</b><small id="sidebar-role">登录后保存作品</small></span><span class="sidebar-account-icon" aria-hidden="true">⌃</span></button>
+    <button type="button" class="sidebar-account" data-action="account-entry" aria-haspopup="dialog" aria-controls="auth-dialog"><span id="sidebar-avatar" class="avatar" aria-hidden="true">访</span><span class="sidebar-account-copy"><b id="sidebar-name">访客体验</b><small id="sidebar-role">登录后保存作品</small></span><span class="sidebar-account-icon" aria-hidden="true">⌃</span></button>
+    <div id="account-menu" class="account-menu" popover aria-label="账户菜单">
+      <header class="account-menu-identity"><span class="avatar" data-account-avatar aria-hidden="true"></span><div><strong id="account-menu-name"></strong><small id="account-menu-login" class="meta"></small></div></header>
+      <a class="account-menu-balance" href="/#credits" data-action="account-credit-details"><span>可用积分</span><strong class="num" id="account-menu-balance"></strong><span aria-hidden="true">›</span></a>
+      <div class="account-menu-links">
+        <button type="button" data-action="account-section" data-value="profile" aria-haspopup="dialog">个人资料</button>
+        <button type="button" data-action="account-section" data-value="password" aria-haspopup="dialog">修改密码</button>
+      </div>
+      <footer><button type="button" data-action="logout">退出登录</button></footer>
+    </div>
   </div>
 </aside>
 <div class="workspace">
@@ -57,6 +66,7 @@
 </div>
 <dialog id="auth-dialog" aria-labelledby="auth-title"></dialog>
 <dialog id="account-dialog" aria-labelledby="account-title"></dialog>
+<dialog id="upscale-dialog" aria-labelledby="upscale-dialog-title"></dialog>
 <dialog id="job-detail-dialog" aria-labelledby="job-detail-title"></dialog>
 <dialog id="admin-user-dialog" aria-labelledby="admin-user-title"></dialog>
 <dialog id="modal" aria-labelledby="modal-title">
@@ -119,6 +129,7 @@
 <script src="/frontend/media.js" defer></script>
 <script src="/frontend/raster.js" defer></script>
 <script src="/frontend/commercial.js" defer></script>
+<script src="/frontend/ppt-reference-catalog.js" defer data-optional></script>
 <script src="/frontend/ppt-templates.js" defer></script>
 <script src="/frontend/workbench.js" defer></script>
 <script src="/frontend/poster.js" defer></script>

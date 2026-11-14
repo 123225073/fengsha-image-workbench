@@ -78,12 +78,13 @@ const workspaceCommercial = (() => {
   const adminTabs = [
     ["connections", "服务连接"], ["models", "模型上架"], ["defaults", "默认模型"], ["audit", "模型配置记录"]
   ];
+  const chooseAdminItem = "请从左侧菜单选择一项。再次点击当前项可收起明细。";
   const adminDefaults = () => ({ tab: "connections", connections: [], models: [], defaults: {}, audit: [], discovered: new Map(), probing: new Set(), editor: null, notice: "", modelKind: "image", modelSelection: new Set() });
   const chatDefaults = () => ({
     conversations: [], active: "", messages: [], draft: "", modelId: "",
     catalog: { models: [], defaults: {} }, request: null, loaded: false,
     notice: "", openRevision: 0, draftRevision: 0, interrupted: null, agent: true, imageModelId: "", creativeSkill: "auto", webSearch: false,
-    attachmentIds: [], plans: [], jobs: new Map(), assets: new Map(), planBusy: new Set(), assemblyPolls: new Set(), uploading: false
+    attachmentIds: [], plans: [], jobs: new Map(), assets: new Map(), planBusy: new Map(), assemblyPolls: new Set(), uploading: false
   });
   let activeOwner;
   let admin = adminDefaults();
@@ -117,17 +118,41 @@ const workspaceCommercial = (() => {
   }
 
   function skillsPanel(manage = false) {
-    return `<section class="commercial-skills stack" data-skills-manage="${manage}" aria-labelledby="commercial-skills-title">
-      <header><h2 id="commercial-skills-title">Agent 与 Skills</h2>
-      <p class="meta">${manage ? "查看内置规则，并为全站图片 Agent 或单个 Skill 添加创作要求。保存后用于后续对话。" : "查看图片 Agent 的工具和各项内置创作流程。"}</p></header>
-      <div id="commercial-skills-status" role="status">正在读取规则…</div>
-      <div class="commercial-skills-list" id="commercial-skills-list"></div></section>`;
+    const route = location.hash;
+    const item = route.startsWith("#skills/") ? route.slice("#skills/".length) : "";
+    return `<section id="commercial-skills-panel" class="${manage ? "commercial-admin " : ""}commercial-skills stack" data-skills-manage="${manage}" data-skills-route="${escape(route)}" data-skills-item="${escape(item)}">
+      <header class="skills-page-heading"><h2>Agent 与 Skills</h2></header>
+      <div id="commercial-skills-status" role="status"></div>
+      <div id="commercial-skills-list"></div></section>`;
+  }
+
+  function skillsNavigation() {
+    return '<div class="ops-subnav skills-subnav" id="ops-skills-subnav" role="group" aria-label="Agent 与 Skills 菜单"></div>';
+  }
+
+  function confirmSkillsNavigation() {
+    const panel = document.querySelector("[data-skills-route]");
+    const form = panel?.querySelector('[data-commercial="skill-rule"]');
+    if (!form || location.hash === panel.dataset.skillsRoute) return true;
+    const input = form.elements.rule;
+    if (!form.dataset.saving && (input.value === input.defaultValue ||
+        window.confirm("这项补充规则尚未保存，要离开当前页面吗？"))) return true;
+    if (form.dataset.saving) notify("补充规则正在保存，请稍等。");
+    history.replaceState(null, "", location.pathname + location.search + panel.dataset.skillsRoute);
+    return false;
+  }
+
+  function skillsHasUnsavedChanges() {
+    const form = document.querySelector('[data-commercial="skill-rule"]');
+    if (!form) return false;
+    return !!form.dataset.saving || form.elements.rule.value !== form.elements.rule.defaultValue;
   }
 
   function ruleEditor(id, name, rule) {
     if (!rule) return "";
     return `<form class="commercial-rule-editor stack" data-commercial="skill-rule" data-rule-id="${escape(id)}" data-revision="${rule.revision}">
-      <label class="field">补充规则
+      <h3>补充规则</h3><p class="meta">保存后用于全站后续的相应 Agent 对话。</p>
+      <label class="field">
         <textarea class="textarea" rows="4" maxlength="2000" name="rule" aria-label="${escape(name)}补充规则"
           placeholder="例如：商品主图先确认目标平台，再按平台要求安排构图。">${escape(rule.text)}</textarea>
       </label>
@@ -137,38 +162,72 @@ const workspaceCommercial = (() => {
     </form>`;
   }
 
-  function skillCard(skill, rule) {
-    return `<details class="commercial-skill-card" name="workspace-creative-rules" data-skill-id="${escape(skill.id)}">
-      <summary><strong>${escape(skill.name)}</strong><span class="commercial-skill-type">${rule?.text ? "有补充规则" : "内置"}</span></summary>
-      <div class="commercial-skill-body"><p class="meta">${escape(skill.summary)}</p>
-      <dl><dt>需要提供</dt><dd>${escape(skill.inputs)}</dd>
-      <dt>你会得到</dt><dd>${escape(skill.output)}</dd><dt>示例需求</dt><dd>${escape(skill.example)}</dd></dl>
-      <h3>内置规则</h3><div class="commercial-skill-instructions">${escape(skill.instructions)}</div>
-      ${ruleEditor(skill.id, skill.name, rule)}</div></details>`;
+  function skillsDirectory(entries) {
+    return `<nav class="skills-directory" aria-label="选择要查看的 Agent 或 Skill">${entries.map(entry =>
+      `<a href="#skills/${escape(entry.id)}" class="skill-directory-link">
+        <span><strong>${escape(entry.name)}</strong><small>${entry.id === "agent" ? "通用 Agent" : "创作 Skill"}</small></span>
+        <span aria-hidden="true">→</span>
+      </a>`).join("")}</nav>`;
+  }
+
+  function fillSkillsNavigation(entries, selected) {
+    const menu = document.querySelector("#ops-skills-subnav");
+    if (!menu) return;
+    menu.innerHTML = entries.map(entry => {
+      const current = entry.id === selected;
+      const href = current ? "#skills" : `#skills/${escape(entry.id)}`;
+      return `<a class="btn btn-ghost" href="${href}" data-ops-focus="skills/${escape(entry.id)}"
+        aria-expanded="${current}" aria-controls="commercial-skills-panel">${escape(entry.name)}</a>`;
+    }).join("");
+  }
+
+  function skillDetail(entry, rule) {
+    const tools = entry.tools || [];
+    const usage = entry.id === "agent"
+      ? `<details class="commercial-skill-tool-list"><summary>可调用的工具（${tools.length} 项）</summary>
+        <ul class="commercial-skill-tools">${tools.map(tool => `<li><strong>${escape(tool.name)}</strong>${tool.local ? '<span class="commercial-skill-type">本地处理</span>' : ""}<p>${escape(tool.description)}</p></li>`).join("")}</ul></details>`
+      : `<dl><dt>需要提供</dt><dd>${escape(entry.inputs)}</dd>
+        <dt>你会得到</dt><dd>${escape(entry.output)}</dd><dt>示例需求</dt><dd>${escape(entry.example)}</dd></dl>`;
+    return `<article class="commercial-skill-body" data-skill-id="${escape(entry.id)}">
+      ${ruleEditor(entry.id, entry.name, rule)}
+      <details class="skill-reference"><summary>使用说明</summary>
+        <div class="stack"><p class="meta">${escape(entry.summary)}</p>${usage}</div>
+      </details>
+      <details class="skill-reference"><summary>内置规则</summary>
+        <div class="commercial-skill-instructions">${escape(entry.instructions)}</div>
+      </details>
+      </article>`;
   }
 
   async function refreshSkills() {
     const owner = identity;
-    const list = document.querySelector("#commercial-skills-list");
-    const status = document.querySelector("#commercial-skills-status");
-    if (!list || !status || list.dataset.loading) return;
-    const manage = list.closest("[data-skills-manage]").dataset.skillsManage === "true";
+    const panel = document.querySelector("[data-skills-route]");
+    if (!panel) return;
+    const list = panel.querySelector("#commercial-skills-list");
+    const status = panel.querySelector("#commercial-skills-status");
+    if (list.dataset.loading || list.childElementCount) return;
+    const manage = panel.dataset.skillsManage === "true";
     list.dataset.loading = "true";
     status.textContent = "正在读取规则…";
     try {
-      const result = await api(manage ? "admin/skills" : "skills");
-      if (!list.isConnected || identity !== owner) return;
-      const {agent, skills, customRules = {}} = result;
-      const actual = skills.filter(skill => skill.id !== "auto");
-      list.innerHTML = `<details class="commercial-skill-card" name="workspace-creative-rules" data-skill-id="agent" open>
-        <summary><strong>通用图片 Agent</strong><span class="commercial-skill-type" data-tools-count="${agent.tools.length}">${agent.tools.length} 项工具${customRules.agent?.text ? " · 有补充规则" : ""}</span></summary>
-        <div class="commercial-skill-body"><p class="meta">${escape(agent.summary)}</p>
-        <h3>内置规则</h3><div class="commercial-skill-instructions">${escape(agent.instructions)}</div>
-        ${ruleEditor("agent", "通用图片 Agent", customRules.agent)}
-        <details class="commercial-skill-tool-list"><summary>可调用的工具</summary>
-        <ul class="commercial-skill-tools">${agent.tools.map(tool => `<li><strong>${escape(tool.name)}</strong>${tool.local ? '<span class="commercial-skill-type">本地处理</span>' : ""}<p>${escape(tool.description)}</p></li>`).join("")}</ul></details>
-        </div></details>${actual.map(skill => skillCard(skill, customRules[skill.id])).join("")}`;
-      status.textContent = "";
+      const {agent, skills, customRules = {}} = await api(manage ? "admin/skills" : "skills");
+      if (!panel.isConnected || identity !== owner) return;
+      const entries = [{...agent, id: "agent", name: "通用图片 Agent"}, ...skills.filter(skill => skill.id !== "auto")];
+      const requested = panel.dataset.skillsItem;
+      const entry = entries.find(item => item.id === requested);
+      const heading = panel.querySelector(".skills-page-heading");
+      if (manage) fillSkillsNavigation(entries, requested);
+      if (entry) {
+        const parent = manage ? '<p class="meta">Agent 与 Skills</p>'
+          : '<a class="skill-directory-back" href="#skills">← 返回 Agent 与 Skills 目录</a>';
+        heading.innerHTML = `${parent}
+          <h2>${escape(entry.name)}</h2>`;
+        list.innerHTML = skillDetail(entry, customRules[entry.id]);
+      } else {
+        heading.innerHTML = '<h2>Agent 与 Skills</h2>';
+        list.innerHTML = manage ? `<p class="meta">${chooseAdminItem}</p>` : skillsDirectory(entries);
+      }
+      status.textContent = requested && !entry ? "找不到所选规则，请从目录选择。" : "";
     } catch (error) {
       if (status.isConnected && identity === owner) {
         status.textContent = error.message + " ";
@@ -197,9 +256,6 @@ const workspaceCommercial = (() => {
       form.dataset.revision = result.revision;
       input.value = result.text;
       input.defaultValue = result.text;
-      const label = form.closest(".commercial-skill-card").querySelector(".commercial-skill-type");
-      const badge = label.dataset.toolsCount ? label.dataset.toolsCount + " 项工具" : "";
-      label.textContent = [badge, result.text ? "有补充规则" : (badge ? "" : "内置")].filter(Boolean).join(" · ");
       status.textContent = result.text ? "已保存，将用于后续对话。" : "已恢复默认规则。";
     } catch (error) {
       status.textContent = error.message;
@@ -213,10 +269,10 @@ const workspaceCommercial = (() => {
 
   function adminPanel() {
     syncOwner();
-    const title = adminTabs.find(([id]) => id === admin.tab)?.[1];
+    const title = adminTabs.find(([id]) => id === admin.tab)?.[1] || "模型中心";
     return `<section class="commercial-admin card" aria-labelledby="commercial-model-title">
       <header class="row-between"><div>
-        <p class="meta">模型中心</p>
+        <p class="meta" id="commercial-model-parent"${admin.tab ? "" : " hidden"}>模型中心</p>
         <h2 id="commercial-model-title">${escape(title)}</h2>
       </div>${button("刷新", "c-admin-reload", "", "ghost")}</header>
       <div id="commercial-admin-main">${adminBody()}</div>
@@ -225,7 +281,7 @@ const workspaceCommercial = (() => {
 
   function adminNavigation() {
     syncOwner();
-    return `<div class="ops-subnav" role="group" aria-label="模型中心菜单">
+    return `<div class="ops-subnav" id="ops-models-subnav" role="group" aria-label="模型中心菜单">
       ${adminTabs.map(([id, label]) => button(label, "c-admin-tab", id, "ghost", `aria-pressed="${admin.tab === id}"`)).join("")}
     </div>`;
   }
@@ -233,13 +289,14 @@ const workspaceCommercial = (() => {
   function adminBody() {
     const content = { connections: connectionsView, models: modelsView, defaults: defaultsView, audit: auditView };
     return `<p class="commercial-notice" id="commercial-admin-notice" role="status">${escape(admin.notice)}</p>
-      ${content[admin.tab]()}`;
+      ${admin.tab ? content[admin.tab]() : `<p class="meta">${chooseAdminItem}</p>`}`;
   }
 
   function drawAdmin() {
     const root = document.querySelector("#commercial-admin-main");
     if (!root) return;
-    document.querySelector("#commercial-model-title").textContent = adminTabs.find(([id]) => id === admin.tab)[1];
+    document.querySelector("#commercial-model-title").textContent = adminTabs.find(([id]) => id === admin.tab)?.[1] || "模型中心";
+    document.querySelector("#commercial-model-parent").hidden = !admin.tab;
     root.innerHTML = adminBody();
     document.querySelectorAll('[data-action="c-admin-tab"]').forEach(node => {
       node.setAttribute("aria-pressed", String(node.dataset.value === admin.tab));
@@ -676,13 +733,16 @@ const workspaceCommercial = (() => {
 
   function gifPlanProgress(plan) {
     const final = plan.results?.[0];
-    if (final?.asset) return "拼接完成";
-    if (final?.error) return "拼接失败";
+    if (final?.asset) return {label: "拼接完成"};
+    if (final?.error) return {label: "拼接失败"};
     const jobs = (plan.jobIds || []).map(id => chat.jobs.get(id));
     const complete = jobs.filter(job => job?.status === "succeeded").length;
-    if (jobs.length && complete === jobs.length) return "正在拼接完整 GIF";
-    if (jobs.some(job => ["failed", "cancelled", "unknown"].includes(job?.status))) return `已生成 ${complete}/${jobs.length} 段，部分片段未完成`;
-    return `已生成 ${complete}/${jobs.length} 段`;
+    if (jobs.length && complete === jobs.length) {
+      const times = jobs.map(job => job.updated).filter(Number.isFinite);
+      return {label: "正在拼接完整 GIF", since: times.length ? Math.max(...times) : undefined};
+    }
+    const incomplete = jobs.some(job => ["failed", "cancelled", "unknown"].includes(job?.status));
+    return {label: `已生成 ${complete}/${jobs.length} 段${incomplete ? "，部分片段未完成" : ""}`};
   }
 
   function planCard(plan) {
@@ -690,8 +750,11 @@ const workspaceCommercial = (() => {
     const isGif = gifPlan(plan);
     const skill = plan.actions?.find(action => action.creativeSkill)?.creativeSkill;
     const heading = isGif ? "GIF 制作方案" : skill ? `${skill}方案` : "图片任务方案";
-    const status = isGif && plan.status === "submitted" ? gifPlanProgress(plan) : states[plan.status] || plan.status;
+    const status = isGif && plan.status === "submitted" ? gifPlanProgress(plan) : {label: states[plan.status] || plan.status};
     const busy = chat.planBusy.has(plan.id);
+    const submission = chat.planBusy.get(plan.id);
+    const phaseLabel = submission === undefined ? status.label : "正在处理";
+    const startedAt = status.since ?? submission;
     const outputLimit = isGif && plan.actions[0].maxOutputBytes;
     const actions = (plan.actions || []).map((action, index) => {
       const ids = [action.sourceId, ...(action.referenceIds || [])].filter(Boolean);
@@ -715,7 +778,7 @@ const workspaceCommercial = (() => {
     }).join("");
     const jobs = (plan.results || []).map(planResult).join("") + (plan.jobIds || []).map(id => planJob(id)).join("");
     return `<section class="commercial-agent-plan" aria-label="${escape(heading)}">
-      <div class="commercial-plan-heading"><h3>${escape(heading)}</h3><span class="meta" role="status">${escape(status)}</span></div>
+      <div class="commercial-plan-heading"><h3>${escape(heading)}</h3><span class="meta" role="status">${startedAt === undefined ? escape(phaseLabel) : activeJobProgress(phaseLabel, startedAt)}</span></div>
       <ol class="commercial-plan-actions">${actions}</ol>
       ${plan.status === "pending" && outputLimit ? `<p class="meta">完整 GIF 最大 ${outputLimit / (1024 * 1024)} MB。超出时可分别下载片段。</p>` : ""}
       ${plan.status === "pending" && skill ? '<p class="meta">可在对话里说明要改哪张图，再确认新版方案。</p>' : ""}
@@ -1100,7 +1163,7 @@ const workspaceCommercial = (() => {
     const current = () => chat === instance && account?.id === activeOwner && ui.route === "chat" && chat.active === active;
     const plan = instance.plans.find(item => item.id === id);
     if (!active || !plan || plan.status !== "pending" || instance.planBusy.has(id)) return;
-    instance.planBusy.add(id);
+    instance.planBusy.set(id, action === "confirm" ? Math.floor(Date.now() / 1000) : undefined);
     drawChat({scroll: false});
     try {
       const result = await api(`chat/conversations/${encodeURIComponent(active)}/plans/${encodeURIComponent(id)}/${action}`, "POST", {});
@@ -1495,12 +1558,14 @@ const workspaceCommercial = (() => {
   const actions = {
     "c-admin-reload": () => refreshAdmin(true),
     "c-admin-tab": async value => {
-      if (!adminTabs.some(([id]) => id === value) || value === admin.tab) return;
-      admin.tab = value;
+      if (!adminTabs.some(([id]) => id === value)) return;
+      const form = document.querySelector('#commercial-admin-main form[data-commercial]');
+      if (form?.dataset.dirty === "true" && !window.confirm("模型配置尚未保存，要离开当前明细吗？")) return;
+      admin.tab = value === admin.tab ? "" : value;
       admin.editor = null;
       admin.notice = "";
       drawAdmin();
-      if (value === "audit") await refreshAudit();
+      if (admin.tab === "audit") await refreshAudit();
     },
     "c-connection": value => {
       admin.editor = { type: "connection", id: value };
@@ -1858,7 +1923,10 @@ const workspaceCommercial = (() => {
     adminPanel,
     adminNavigation,
     skillsPanel,
+    skillsNavigation,
     refreshSkills,
+    confirmSkillsNavigation,
+    skillsHasUnsavedChanges,
     chatView,
     searchSources,
     revealText,

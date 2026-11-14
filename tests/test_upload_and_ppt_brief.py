@@ -55,6 +55,10 @@ class UploadValidationTests(TestCase):
 
 
 class PptBriefTests(TestCase):
+    def test_template_agenda_recognizes_slide_heading_only(self):
+        self.assertTrue(brief.template_has_agenda("文件：参考.pptx\n\n【幻灯片 2】\n目录\n阶段一\n阶段二"))
+        self.assertFalse(brief.template_has_agenda("【幻灯片 3】\n管理方法\n请提供目录"))
+
     def test_base_templates_are_valid_in_admin_preset_settings(self):
         for name in ppt.PALETTES:
             self.assertIn(name, projects._template_settings("ppt", {"style": name}))

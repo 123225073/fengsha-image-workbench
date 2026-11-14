@@ -4,7 +4,7 @@ const workspaceProjects = (() => {
   const templateScopes = {image: "AI 生图", "image-edit": "图片编辑", poster: "海报", ppt: "PPT", chat: "AI 对话"};
   const stateForAccount = () => ({
     owner: null, session: null, projects: [], posterProjects: [], templates: [], managed: [],
-    draft: null, templateEditor: null, filter: "active", switching: false, current: null, related: null,
+    draft: null, templateEditor: null, filter: "active", switching: false, deleting: new Set(), current: null, related: null,
     templateFilter: "all", templateFocus: "", recoveryNotices: new Set()
   });
   let data = stateForAccount();
@@ -105,6 +105,13 @@ const workspaceProjects = (() => {
       current.current.blocked = conflicted || project.archived || project.deleted;
       if (!current.current.blocked && snapshot(local) !== snapshot(workspaceDraft("ppt"))) save();
       if (ui.route === "ppt") render();
+    }).catch(error => {
+      if (error.status !== 404) throw error;
+      if (data === current && state.activeProjectId === id && !current.current && !current.deleting.has(id)) {
+        // Another tab deleted the project. Restore the independent draft locally.
+        leaveProject(current, false);
+        if (ui.route === "ppt") render();
+      }
     }).finally(() => { current.recovering = null; });
     return current.recovering;
   }
@@ -161,15 +168,16 @@ const workspaceProjects = (() => {
   }
 
   function projectCard(project) {
+    const remove = button("删除", "p-delete", project.id, "ghost", data.deleting.has(project.id) ? "disabled" : "");
     return `<article class="card stack">
       <h3>${esc(project.name)}</h3><p class="meta">更新于 ${day(project.updated)}</p>
       ${project.description ? `<p>${esc(project.description)}</p>` : ""}
-      ${project.deleted ? `<div class="row">${button("恢复项目", "p-restore", project.id)}</div>` :
+      ${project.deleted ? `<div class="row">${button("恢复项目", "p-restore", project.id)}${remove}</div>` :
         `
           <div class="row">${project.archived ? button("恢复", "p-archive", project.id) :
             button("打开 PPT", "p-open", project.id, "primary") + button("编辑项目", "p-rename", project.id, "ghost") +
             button("项目素材", "p-assets", project.id, "ghost") + button("归档", "p-archive", project.id, "ghost")}
-            ${button("删除", "p-delete", project.id, "ghost")}</div>`}
+            ${remove}</div>`}
     </article>`;
   }
 
@@ -335,8 +343,14 @@ const workspaceProjects = (() => {
     }
     if (scope === "poster") return input("title", "海报标题", 30) + input("subtitle", "海报副标题", 40) + input("date", "活动时间", 32) +
       select("preset", "出图方向", Object.entries(posterPresets).map(([key, value]) => [key, value.name]), "auto") + text("prompt", "主视觉描述", 2000);
-    if (scope === "ppt") return text("brief", "汇报需求", 6000) + select("level", "详细程度", labels(["简报", "标准", "详细"]), "简报") +
-      select("style", "视觉风格", labels(["基础·商务蓝", "基础·极简灰", "基础·教育绿", "基础·暖白橙", "商务深蓝", "科技", "极简"]), "基础·商务蓝");
+    if (scope === "ppt") {
+      const current = settings.style;
+      const styles = workspacePptTemplates.availableNames();
+      const choices = labels(styles);
+      if (current && !styles.includes(current)) choices.push([current, current + "（旧样式）"]);
+      return text("brief", "汇报需求", 6000) + select("level", "详细程度", labels(["简报", "标准", "详细"]), "简报") +
+        select("style", "视觉风格", choices, "海湾·商务提案");
+    }
     if (scope === "chat") return text("prompt", "首条消息", 12000);
     return select("format", "生成格式", Object.entries(studioFormats), "still") + text("prompt", "生成提示词", 3000) +
       `<div class="row" data-template-still${settings.format && settings.format !== "still" ? " hidden" : ""}>${select("ratio", "画面比例", labels(imageRatios), "1:1")}${select("resolution", "分辨率", labels(Object.keys(resolutions)), "1K")}</div>`;
@@ -474,6 +488,7 @@ const workspaceProjects = (() => {
 
   async function applyProject(project, current, route = "ppt") {
     if (data !== current || identity !== current.session || account?.id !== current.owner) return;
+    if (current.deleting.has(project.id)) return;
     if (project.archived || project.deleted) throw new Error("请先恢复项目。");
     if (!state.activeProjectId) {
       state.standaloneDrafts.ppt ??= workspaceDraft("ppt");
@@ -491,19 +506,20 @@ const workspaceProjects = (() => {
     }
   }
 
-  function leaveProject(current) {
+  function leaveProject(current, persist = true) {
     if (!state.activeProjectId) return;
     installDraft("ppt", state.standaloneDrafts.ppt);
     state.activeProjectId = "";
     delete state.standaloneDrafts.ppt;
     current.current = null;
     current.related = null;
-    save();
+    ui.pptSessions = null;
+    if (persist) save();
   }
 
   async function openProject(id) {
     const current = syncOwner();
-    if (current.switching || !canSwitchPpt()) return;
+    if (current.switching || current.deleting.has(id) || !canSwitchPpt()) return;
     if (current.current?.project.id === id && !current.current.blocked) return go("ppt");
     current.switching = true;
     try {
@@ -530,6 +546,48 @@ const workspaceProjects = (() => {
     if (current.related?.id === project.id) current.related = null;
     data.draft = null;
     await refresh("projects", true);
+  }
+
+  async function deleteProject(project, current) {
+    if (data !== current || current.deleting.has(project.id)) return;
+    current.deleting.add(project.id);
+    draw();
+    try {
+      await queueWrite(async () => {
+        if (data !== current || identity !== current.session || account?.id !== current.owner) return;
+        let result;
+        try {
+          result = await api(`projects/${encodeURIComponent(project.id)}/permanent`, "DELETE", {revision: project.revision});
+        } catch (error) {
+          // The first DELETE may have committed before this client received it.
+          if (error.status !== 404) throw error;
+          const exists = await api(`projects/${encodeURIComponent(project.id)}`).then(() => true, missing => {
+            if (missing.status !== 404) throw missing;
+            return false;
+          });
+          if (exists) throw error;
+          const session = await api("session");
+          if (session.user?.id !== current.owner || session.workspace?.activeProjectId === project.id) throw error;
+          result = {...session, points: session.user.points};
+          // Only adopt the revision if the server made the expected single change.
+          if (state.activeProjectId === project.id && session.user.revision === revision + 1) revision++;
+        }
+        if (data !== current || identity !== current.session) return;
+        if (revision === result.previousWorkspaceRevision) revision = result.workspaceRevision;
+        const deletedActive = state.activeProjectId === project.id;
+        if (deletedActive) leaveProject(current);
+        updateWallet(result);
+        current.projects = current.projects.filter(item => item.id !== project.id);
+        if (current.draft?.project?.id === project.id) current.draft = null;
+        if (current.related?.id === project.id) current.related = null;
+        scheduleJobs(0);
+        if (deletedActive && ui.route === "ppt") render();
+        notify("PPT 项目已永久删除。");
+      });
+    } finally {
+      current.deleting.delete(project.id);
+      if (data === current) draw();
+    }
   }
 
   async function saveProject(form) {
@@ -726,12 +784,14 @@ const workspaceProjects = (() => {
       notify(project.archived ? "项目已恢复。" : "项目已归档。");
     },
     "p-delete": id => {
-      const project = data.projects.find(item => item.id === id);
+      const current = syncOwner();
+      const project = current.projects.find(item => item.id === id);
       if (!project) return;
-      openModal("删除项目", project.name, "项目将移入回收站，可随时恢复。", "移入回收站", async () => {
-        await alterProject(project, {deleted: true});
-        notify("项目已移入回收站。");
-      });
+      const bound = current.current?.project;
+      const confirmed = bound?.id === project.id ? bound : project;
+      openModal("永久删除 PPT 项目", confirmed.name,
+        "将删除项目、大纲与对话草稿，操作无法恢复。素材库中的文件仍可使用。排队任务会取消，已提交到模型的任务按实际结果结算。",
+        "永久删除", () => deleteProject(confirmed, current));
     },
     "p-restore": async id => {
       const project = data.projects.find(item => item.id === id);

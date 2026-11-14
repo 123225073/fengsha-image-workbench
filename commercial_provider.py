@@ -269,7 +269,23 @@ def _read(response, limit, submission=False):
     return data
 
 
-def _status_error(response, submission=False):
+def _image_rejection_message(detail, status):
+    """Describe only known upstream codes and fields, never echo the response body."""
+    code = str(detail.get("code") or "").lower()
+    kind = str(detail.get("type") or "").lower()
+    field = str(detail.get("param") or "").lower()
+    policy_codes = {"content_policy_violation", "content_filter", "moderation_blocked", "safety_violation",
+                    "image_safety_violation", "image_content_policy_violation"}
+    if code in policy_codes or kind in policy_codes:
+        return f"上游报告内容审核拒绝（HTTP {status}）。服务未说明具体触发项。", True
+    if field in {"image", "image[]", "images", "reference_images", "mask"}:
+        return f"上游拒绝了参考图、输入图片或蒙版字段（HTTP {status}）。请核对当前模型支持的输入格式、数量和尺寸。", False
+    if field in {"size", "image_size", "aspect_ratio", "resolution", "width", "height"}:
+        return f"上游拒绝了输出尺寸字段（HTTP {status}）。请核对当前模型支持的尺寸。", False
+    return f"上游拒绝了生图请求（HTTP {status}），未能确认具体原因。", False
+
+
+def _status_error(response, submission=False, *, image_request=False):
     status = response.status
     request_id = _safe_id(response.getheader("x-request-id"))
     errors = {
@@ -284,13 +300,25 @@ def _status_error(response, submission=False):
     }
     error = ProviderError(status if status in errors else 502, errors.get(status, "模型服务返回异常响应。"),
                           submission and (status == 408 or status >= 500), request_id)
-    if submission and status in (400, 422):
-        # A bounded response is sufficient to inspect size rejection fields.
+    if submission and (status in (400, 422) or image_request and status == 403):
+        # Inspect a bounded response without logging or exposing the upstream body.
         detail = response.read(32769)
         if len(detail) <= 32768:
-            error.size_rejection = _size_rejection(detail)
-            error.tools_unsupported = _tools_unsupported(detail)
-            error.stream_unsupported = _stream_unsupported(detail)
+            policy_blocked = False
+            if image_request:
+                try:
+                    value = json.loads(detail)
+                except (ValueError, UnicodeError):
+                    value = None
+                fields = value.get("error", value) if isinstance(value, dict) else None
+                fields = fields if isinstance(fields, dict) else {}
+                message, policy_blocked = _image_rejection_message(fields, status)
+                if status != 403 or policy_blocked:
+                    error = ProviderError(status, message, request_id=request_id)
+            if status in (400, 422) and not policy_blocked:
+                error.size_rejection = _size_rejection(detail)
+                error.tools_unsupported = _tools_unsupported(detail)
+                error.stream_unsupported = _stream_unsupported(detail)
     return error
 
 
@@ -335,7 +363,7 @@ def _json_request(config, endpoint, *, payload=None, raw=None, content_type=None
     start = time.monotonic()
     with _response(config["baseUrl"] + endpoint, key=config["key"], data=raw, content_type=content_type) as response:
         if not 200 <= response.status < 300:
-            raise _status_error(response, raw is not None)
+            raise _status_error(response, raw is not None, image_request=endpoint.startswith("/images/"))
         data = _read(response, limit, raw is not None)
         request_id = _safe_id(response.getheader("x-request-id"))
     try:
@@ -581,7 +609,7 @@ def _stream_image(config, endpoint, payload, images, mask, receipt, on_preview):
         raw, content_type = json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json"
     with _response(config["baseUrl"] + endpoint, key=config["key"], data=raw, content_type=content_type) as response:
         if not 200 <= response.status < 300:
-            raise _status_error(response, True)
+            raise _status_error(response, True, image_request=True)
         request_id = _safe_id(response.getheader("x-request-id"))
         receipt["requestId"] = request_id
         if "text/event-stream" not in (response.getheader("Content-Type") or "").lower():
